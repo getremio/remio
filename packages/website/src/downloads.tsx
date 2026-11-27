@@ -49,9 +49,10 @@ export function thanksPageHref(fileUrl: string, locale: Locale): string {
   return localizePath(`/download/thanks?${new URLSearchParams({ file: fileUrl })}`, locale);
 }
 
-export const appStoreUrl = "https://github.com/getremio/remio/releases";
-export const testFlightBetaUrl = "https://github.com/getremio/remio/releases";
-export const playStoreUrl = "https://github.com/getremio/remio/releases";
+export const releasesPageUrl = "https://github.com/getremio/remio/releases";
+export const appStoreUrl = releasesPageUrl;
+export const testFlightBetaUrl = releasesPageUrl;
+export const playStoreUrl = releasesPageUrl;
 export const webAppUrl = "https://app.remio.hoshizukimio.moe";
 
 export interface PrimaryDownload {
@@ -66,17 +67,19 @@ export function getDesktopDownload(
   locale: Locale,
 ): PrimaryDownload {
   const urls = downloadUrls(release);
+  const hrefFor = (fileUrl: string) =>
+    release.version ? thanksPageHref(fileUrl, locale) : releasesPageUrl;
   switch (platform) {
     case "windows":
       return {
         label: "Windows",
-        href: thanksPageHref(urls.windowsExeX64, locale),
+        href: hrefFor(urls.windowsExeX64),
         icon: WindowsIcon,
       };
     case "linux":
-      return { label: "Linux", href: thanksPageHref(urls.linuxAppImage, locale), icon: LinuxIcon };
+      return { label: "Linux", href: hrefFor(urls.linuxAppImage), icon: LinuxIcon };
     case "mac":
-      return { label: "Mac", href: thanksPageHref(urls.macAppleSilicon, locale), icon: AppleIcon };
+      return { label: "Mac", href: hrefFor(urls.macAppleSilicon), icon: AppleIcon };
   }
 }
 

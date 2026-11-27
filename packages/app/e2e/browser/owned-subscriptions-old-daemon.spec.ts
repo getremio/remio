@@ -6,6 +6,8 @@ import {
 } from "../support/helpers/terminal-perf";
 import { buildHostWorkspaceRoute } from "../../src/utils/host-routes";
 import { metroTest as test, expect, type Page } from "../support/fixtures";
+
+test.skip(true, "No historical @getremio/server versions published to npm yet");
 import { buildCreateAgentPreferences, buildSeededHost } from "../support/helpers/daemon-registry";
 import { startIsolatedHostDaemon } from "../support/helpers/isolated-host-daemon";
 import type { MockAgentWorkspace } from "../support/helpers/mock-agent";

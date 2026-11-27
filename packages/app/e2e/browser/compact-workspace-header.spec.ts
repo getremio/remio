@@ -22,7 +22,7 @@ const labels = {
     title: "workspace-with-a-very-long-release-and-investigation-name",
     project: "project-with-a-very-long-customer-integration-name",
   },
-  short: { title: "main", project: "Remio" },
+  short: { title: "main", project: "App" },
 };
 
 async function openNamedWorkspace(page: Page, names: typeof labels.long) {

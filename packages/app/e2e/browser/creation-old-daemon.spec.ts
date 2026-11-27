@@ -54,6 +54,7 @@ for (const version of ["0.2.5", "0.7.2", "0.8.0"]) {
     },
   });
   test.describe(`published daemon ${version}`, () => {
+    test.skip(true, "No historical @getremio/server versions published to npm yet");
     test.beforeAll(async () => {
       test.setTimeout(120_000);
       daemon = await startIsolatedHostDaemon(`srv_creation_${randomUUID()}`, {

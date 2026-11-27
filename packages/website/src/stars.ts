@@ -38,11 +38,15 @@ function isStars(value: unknown): value is string {
 }
 
 export const getStarCount = createServerFn({ method: "GET" }).handler(async () => {
-  const stars = await getBlockingColdCache({
-    context: getWebsiteCacheContext(),
-    key: STARS_CACHE_KEY,
-    isValue: isStars,
-    fetchFresh: fetchStarCount,
-  });
-  return { stars };
+  try {
+    const stars = await getBlockingColdCache({
+      context: getWebsiteCacheContext(),
+      key: STARS_CACHE_KEY,
+      isValue: isStars,
+      fetchFresh: fetchStarCount,
+    });
+    return { stars };
+  } catch {
+    return { stars: "" };
+  }
 });

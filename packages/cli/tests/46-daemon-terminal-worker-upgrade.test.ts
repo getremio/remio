@@ -109,7 +109,14 @@ function createInstallation(name: string, version: string): Installation {
   mkdirSync(cliDir, { recursive: true });
   cpSync(join(repoRoot, "packages/cli/package.json"), join(cliDir, "package.json"));
   cpSync(join(repoRoot, "packages/cli/dist"), join(cliDir, "dist"), { recursive: true });
-  cpSync(join(repoRoot, "packages/server/node_modules/node-pty"), join(modules, "node-pty"), {
+  const nodePtySource = [
+    join(repoRoot, "packages/server/node_modules/node-pty"),
+    join(repoRoot, "node_modules/node-pty"),
+  ].find((candidate) => existsSync(candidate));
+  if (!nodePtySource) {
+    throw new Error("Could not locate node-pty for terminal worker upgrade test");
+  }
+  cpSync(nodePtySource, join(modules, "node-pty"), {
     recursive: true,
   });
 

@@ -171,12 +171,18 @@ async function waitForAppPage(browser, expoPort) {
   while (Date.now() < deadline) {
     for (const context of browser.contexts()) {
       for (const page of context.pages()) {
-        if (page.url().includes(`localhost:${expoPort}`)) return page;
+        const url = page.url();
+        if (url.includes(`localhost:${expoPort}`) || url.includes(`127.0.0.1:${expoPort}`)) {
+          return page;
+        }
       }
     }
     await delay(250);
   }
-  throw new Error("Timed out waiting for the real Electron app renderer");
+  const urls = browser.contexts().flatMap((context) => context.pages().map((page) => page.url()));
+  throw new Error(
+    `Timed out waiting for the real Electron app renderer (urls: ${JSON.stringify(urls)})`,
+  );
 }
 
 async function waitForDesktopStatus(page) {

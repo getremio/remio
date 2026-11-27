@@ -428,7 +428,7 @@ test.each(["restore", "undo", "reopen", "refresh", "legacy"] as const)(
     if (route === "refresh") {
       const legacy = new DaemonClient({
         url: `ws://127.0.0.1:${ctx.daemon.port}/ws`,
-        appVersion: "0.1.104",
+        appVersion: "0.0.0",
       });
       await legacy.connect();
       try {

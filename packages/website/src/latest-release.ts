@@ -24,6 +24,16 @@ export interface ReleaseChannels {
   beta: ReleaseInfo | null;
 }
 
+export const EMPTY_RELEASE_CHANNELS: ReleaseChannels = {
+  stable: {
+    version: "",
+    linuxAppImageAsset: "",
+    windowsX64Asset: null,
+    windowsArm64Asset: null,
+  },
+  beta: null,
+};
+
 const LINUX_APPIMAGE_ASSET_PATTERN =
   /^Remio-(?:\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)-)?x86_64\.AppImage$/;
 

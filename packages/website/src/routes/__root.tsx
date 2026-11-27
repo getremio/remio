@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { createContext, useContext } from "react";
 import { Outlet, createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
-import type { ReleaseChannels, ReleaseInfo } from "~/latest-release";
+import { EMPTY_RELEASE_CHANNELS, type ReleaseChannels, type ReleaseInfo } from "~/latest-release";
 import type { VisitorPlatform } from "~/platform";
 import { getVisitorPlatform } from "~/platform";
 import { getLatestRelease } from "~/release";
@@ -12,15 +12,7 @@ interface StarsContext {
   stars: string;
 }
 
-const ReleaseCtx = createContext<ReleaseChannels>({
-  stable: {
-    version: "",
-    linuxAppImageAsset: "",
-    windowsX64Asset: null,
-    windowsArm64Asset: null,
-  },
-  beta: null,
-});
+const ReleaseCtx = createContext<ReleaseChannels>(EMPTY_RELEASE_CHANNELS);
 const StarsCtx = createContext<StarsContext>({ stars: "" });
 const PlatformCtx = createContext<VisitorPlatform>("mac");
 

@@ -108,11 +108,21 @@ export default {
     }
 
     if (url.pathname === "/android-version.txt") {
-      const version = await getLatestAndroidVersion({
-        cache: env.WEBSITE_CACHE ?? null,
-        waitUntil: (promise) => context.waitUntil(promise),
-      });
-      return plainTextResponse(`${getAndroidVersionCode(version)}\n`);
+      try {
+        const version = await getLatestAndroidVersion({
+          cache: env.WEBSITE_CACHE ?? null,
+          waitUntil: (promise) => context.waitUntil(promise),
+        });
+        return plainTextResponse(`${getAndroidVersionCode(version)}\n`);
+      } catch {
+        return new Response("No Android release available\n", {
+          status: 404,
+          headers: {
+            "content-type": "text/plain; charset=utf-8",
+            "cache-control": "no-store",
+          },
+        });
+      }
     }
 
     const markdown = resolveDocMarkdownPath(url.pathname);

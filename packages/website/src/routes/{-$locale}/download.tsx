@@ -10,6 +10,7 @@ import {
   downloadUrls,
   appStoreUrl,
   playStoreUrl,
+  releasesPageUrl,
   testFlightBetaUrl,
   thanksPageHref,
   webAppUrl,
@@ -70,8 +71,10 @@ function Download() {
   const onBeta = activeBeta !== null;
   const release = activeBeta ?? stable;
   const { version } = release;
+  const hasRelease = Boolean(version);
   const urls = downloadUrls(release);
   const thanks = (fileUrl: string) => thanksPageHref(fileUrl, locale);
+  const assetHref = (fileUrl: string) => (hasRelease ? thanks(fileUrl) : releasesPageUrl);
 
   return (
     <SiteShell width="default">
@@ -81,8 +84,12 @@ function Download() {
             {t("download.title")}
           </h1>
           <p className="text-muted-foreground">
-            v{version}
-            <span className="mx-2 text-muted-foreground/40">·</span>
+            {hasRelease && (
+              <>
+                v{version}
+                <span className="mx-2 text-muted-foreground/40">·</span>
+              </>
+            )}
             <Link
               {...changelogLink(version, locale)}
               className="underline underline-offset-4 decoration-border hover:text-foreground hover:decoration-current transition-colors"
@@ -110,8 +117,16 @@ function Download() {
           <PlatformRow icon={AppleIcon} label="macOS">
             <div className="flex flex-col items-start gap-2 sm:items-end">
               <PillGroup>
-                <DownloadPill href={thanks(urls.macAppleSilicon)} label="Apple Silicon" />
-                <DownloadPill href={thanks(urls.macIntel)} label="Intel" />
+                <DownloadPill
+                  href={assetHref(urls.macAppleSilicon)}
+                  label="Apple Silicon"
+                  external={!hasRelease}
+                />
+                <DownloadPill
+                  href={assetHref(urls.macIntel)}
+                  label="Intel"
+                  external={!hasRelease}
+                />
               </PillGroup>
               <span className="text-xs text-muted-foreground">{t("download.macRequirement")}</span>
             </div>
@@ -126,20 +141,29 @@ function Download() {
           <PlatformRow icon={WindowsIcon} label="Windows">
             <PillGroup>
               <DownloadPill
-                href={thanks(urls.windowsExeX64)}
+                href={assetHref(urls.windowsExeX64)}
                 label={urls.windowsExeArm64 ? "Intel / x64" : t("download.download")}
+                external={!hasRelease}
               />
               {urls.windowsExeArm64 && (
-                <DownloadPill href={thanks(urls.windowsExeArm64)} label="ARM64" />
+                <DownloadPill
+                  href={assetHref(urls.windowsExeArm64)}
+                  label="ARM64"
+                  external={!hasRelease}
+                />
               )}
             </PillGroup>
           </PlatformRow>
 
           <PlatformRow icon={LinuxIcon} label="Linux">
             <PillGroup>
-              <DownloadPill href={thanks(urls.linuxAppImage)} label="AppImage" />
-              <DownloadPill href={thanks(urls.linuxDeb)} label="DEB" />
-              <DownloadPill href={thanks(urls.linuxRpm)} label="RPM" />
+              <DownloadPill
+                href={assetHref(urls.linuxAppImage)}
+                label="AppImage"
+                external={!hasRelease}
+              />
+              <DownloadPill href={assetHref(urls.linuxDeb)} label="DEB" external={!hasRelease} />
+              <DownloadPill href={assetHref(urls.linuxRpm)} label="RPM" external={!hasRelease} />
             </PillGroup>
           </PlatformRow>
         </div>
@@ -156,7 +180,7 @@ function Download() {
           <PlatformRow icon={AndroidIcon} label="Android">
             <PillGroup>
               {!onBeta && <DownloadPill href={playStoreUrl} label="Play Store" external />}
-              <DownloadPill href={thanks(urls.androidApk)} label="APK" />
+              <DownloadPill href={assetHref(urls.androidApk)} label="APK" external={!hasRelease} />
             </PillGroup>
           </PlatformRow>
 

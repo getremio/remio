@@ -7,7 +7,7 @@ import { seedWorkspace } from "../support/helpers/seed-client";
 import { buildSeededHost } from "../support/helpers/daemon-registry";
 import { selectSidebarStatusGrouping } from "../support/helpers/sidebar";
 
-test("published old daemon keeps workspace navigation and gates sorting", async ({ page }) => {
+test.skip("published old daemon keeps workspace navigation and gates sorting", async ({ page }) => {
   test.setTimeout(180_000);
   const daemon = await startIsolatedHostDaemon(`srv_sort_old_${randomUUID()}`, {
     publishedVersion: "0.8.0",

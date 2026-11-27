@@ -1,7 +1,11 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getWebsiteCacheContext } from "./cloudflare-cache";
-import { getReleaseChannels } from "./latest-release";
+import { EMPTY_RELEASE_CHANNELS, getReleaseChannels } from "./latest-release";
 
 export const getLatestRelease = createServerFn({ method: "GET" }).handler(async () => {
-  return getReleaseChannels(getWebsiteCacheContext());
+  try {
+    return await getReleaseChannels(getWebsiteCacheContext());
+  } catch {
+    return EMPTY_RELEASE_CHANNELS;
+  }
 });

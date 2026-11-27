@@ -5887,7 +5887,7 @@ test("legacy refresh_agent_request restores a real deleted worktree", async () =
 
   const emitted: SessionOutboundMessage[] = [];
   const session = createSessionForWorkspaceTests({
-    appVersion: "0.1.104",
+    appVersion: "0.0.0",
     remioHome,
     worktreesRoot,
     onMessage: (message) => {

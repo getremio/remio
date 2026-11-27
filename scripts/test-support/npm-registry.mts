@@ -131,7 +131,7 @@ export function npmPluginPackages() {
     "remio-plugin.json": JSON.stringify({
       id: "npm-review",
       description: "Installed from the npm fixture registry",
-      requirements: { remio: ">=0.4.0" },
+      requirements: { remio: ">=0.0.1" },
     }),
     "index.server.ts": `import value from "remio-fixture-dependency";
 export default function contribute() {

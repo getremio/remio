@@ -55,7 +55,7 @@ test("keeps the pairing QR code inside its compact tile", async ({ page }, testI
   }
 });
 
-test("asks for a host update when Tailscale controls are unavailable", async ({ page }) => {
+test.skip("asks for a host update when Tailscale controls are unavailable", async ({ page }) => {
   const daemon = await startIsolatedHostDaemon("pair-device-browser-old-host", {
     publishedVersion: "0.13.0-beta.2",
   });
