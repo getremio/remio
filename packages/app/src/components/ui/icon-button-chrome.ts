@@ -1,0 +1,173 @@
+import { createContext, useCallback, useContext } from "react";
+import type { StyleProp, ViewStyle } from "react-native";
+import { StyleSheet } from "react-native-unistyles";
+import {
+  bySizing,
+  controlSizingForLayout,
+  ICON_BUTTON_SIZES,
+  TOUCH_ICON_SIZE,
+  type SizingValue,
+} from "@/components/ui/control-geometry";
+import type { LayoutValue } from "@/components/ui/control-sizing";
+import { ICON_SIZE } from "@/styles/theme";
+
+export { extraMutedIconColorMapping, mutedIconColorMapping } from "@/components/ui/icon-color";
+
+export type IconButtonChromeSize = "large" | "small";
+
+// Touch-sized, every icon button is one target with one glyph size.
+const GLYPH_SIZES = {
+  large: { touch: TOUCH_ICON_SIZE.md, pointer: ICON_SIZE.md },
+  small: { touch: TOUCH_ICON_SIZE.md, pointer: ICON_SIZE.sm },
+} satisfies Record<IconButtonChromeSize, SizingValue>;
+
+export interface IconButtonChromeState {
+  hovered?: boolean;
+  pressed?: boolean;
+  open?: boolean;
+  active?: boolean;
+}
+
+function resolveIconButtonFrame(size: IconButtonChromeSize, compact: boolean) {
+  if (size === "large") return styles.large;
+  return controlSizingForLayout(compact) === "touch" ? styles.smallTouch : styles.small;
+}
+
+interface IconButtonChromeOptions {
+  size: IconButtonChromeSize;
+  state?: IconButtonChromeState;
+  compact?: boolean;
+  disabled?: boolean;
+  /** A circular hitbox and highlight, for buttons inside a pill-shaped container. */
+  round?: boolean;
+  style?: StyleProp<ViewStyle>;
+}
+
+const IconButtonChromeContext = createContext<"default" | "header-island">("default");
+
+/** A container owns the chrome of its icon actions, including custom menu and badge triggers. */
+export const IconButtonChromeProvider = IconButtonChromeContext.Provider;
+
+/** The same state callback works with Pressable, TooltipTrigger, and DropdownMenuTrigger. */
+export function useIconButtonChromeStyle({
+  size,
+  compact,
+  disabled,
+  round,
+  style,
+  active,
+}: Omit<IconButtonChromeOptions, "state"> & { active?: boolean }) {
+  const scope = useContext(IconButtonChromeContext);
+  return useCallback(
+    (state: IconButtonChromeState) =>
+      iconButtonChromeStyle({
+        size: scope === "header-island" ? "large" : size,
+        compact,
+        disabled,
+        round: scope === "header-island" || round,
+        style,
+        state: { ...state, active: active || state.active },
+      }),
+    [scope, size, compact, disabled, round, style, active],
+  );
+}
+
+/** Shared hitbox and interaction chrome for icon-only header and toolbar controls. */
+export function iconButtonChromeStyle({
+  size,
+  state,
+  compact = false,
+  disabled = false,
+  round = false,
+  style,
+}: IconButtonChromeOptions): StyleProp<ViewStyle> {
+  const highlighted = state?.active || state?.hovered || state?.pressed || state?.open;
+  return [
+    resolveIconButtonFrame(size, compact),
+    round ? styles.round : null,
+    style,
+    highlighted ? styles.highlighted : null,
+    disabled ? styles.disabled : null,
+  ];
+}
+
+/** Frame-only form for non-interactive placeholders that must preserve header alignment. */
+export function iconButtonChromeFrameStyle(
+  size: IconButtonChromeSize,
+  compact = false,
+): StyleProp<ViewStyle> {
+  return resolveIconButtonFrame(size, compact);
+}
+
+export function iconButtonChromeGlyphSize(size: IconButtonChromeSize, compact = false): number {
+  return GLYPH_SIZES[size][controlSizingForLayout(compact)];
+}
+
+/** The glyph for an icon button, sized by its container's chrome the way its frame is. */
+export function useIconButtonChromeGlyphSize(size: IconButtonChromeSize, compact = false): number {
+  const scope = useContext(IconButtonChromeContext);
+  return iconButtonChromeGlyphSize(scope === "header-island" ? "large" : size, compact);
+}
+
+/**
+ * The margin that pulls a button out by how far its frame reaches past its glyph. A row that hangs
+ * its edge buttons by it keeps their glyphs, not their frames, on the row's content rail.
+ */
+export function iconButtonChromeHang(size: IconButtonChromeSize): LayoutValue {
+  const frame = ICON_BUTTON_SIZES[size];
+  const glyph = GLYPH_SIZES[size];
+  return bySizing({
+    touch: (glyph.touch - frame.touch) / 2,
+    pointer: (glyph.pointer - frame.pointer) / 2,
+  });
+}
+
+export function smallIconButtonChromeFrameSize(compact = false): number {
+  return ICON_BUTTON_SIZES.small[controlSizingForLayout(compact)];
+}
+
+// Icon buttons sit in header and toolbar rows that clip overflow, so the keyboard focus ring
+// from public/index.html is drawn inside the frame instead of around it.
+const FOCUS_RING_INSET = -2;
+
+const styles = StyleSheet.create((theme) => ({
+  large: {
+    width: bySizing(ICON_BUTTON_SIZES.large),
+    height: bySizing(ICON_BUTTON_SIZES.large),
+    padding: 0,
+    borderRadius: theme.borderRadius.md,
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+    outlineOffset: FOCUS_RING_INSET,
+  },
+  small: {
+    width: ICON_BUTTON_SIZES.small.pointer,
+    height: ICON_BUTTON_SIZES.small.pointer,
+    padding: 0,
+    borderRadius: theme.borderRadius.md,
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+    outlineOffset: FOCUS_RING_INSET,
+  },
+  smallTouch: {
+    width: ICON_BUTTON_SIZES.small.touch,
+    height: ICON_BUTTON_SIZES.small.touch,
+    padding: 0,
+    borderRadius: theme.borderRadius.md,
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+    outlineOffset: FOCUS_RING_INSET,
+  },
+  round: {
+    borderRadius: theme.borderRadius.full,
+  },
+  highlighted: {
+    backgroundColor: theme.colors.interactionHighlight,
+  },
+  disabled: {
+    opacity: theme.opacity[50],
+  },
+}));

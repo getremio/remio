@@ -1,0 +1,6 @@
+{
+  "id": "media-stream",
+  "requirements": {
+    "remio": ">=0.0.1"
+  }
+}

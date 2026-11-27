@@ -1,0 +1,9 @@
+{
+  "platforms": ["ios", "android"],
+  "ios": {
+    "modules": ["RemioHardwareKeyboardModule"]
+  },
+  "android": {
+    "modules": ["moe.hoshizukimio.remio.keyboard.RemioHardwareKeyboardModule"]
+  }
+}

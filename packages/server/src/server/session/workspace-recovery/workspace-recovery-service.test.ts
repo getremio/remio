@@ -1,0 +1,854 @@
+import { execFileSync } from "node:child_process";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterEach, describe, expect, test } from "vitest";
+
+import pino from "pino";
+import { archivePersistedWorkspaceRecord } from "../../workspace-archive-service.js";
+import { getCheckoutStatus } from "../../../utils/checkout-git.js";
+import {
+  readRemioWorktreeMetadata,
+  writeRemioWorktreeMetadata,
+} from "../../../utils/worktree-metadata.js";
+import { createWorktree, deleteRemioWorktree } from "../../../utils/worktree.js";
+import {
+  FileBackedProjectRegistry,
+  FileBackedWorkspaceRegistry,
+  createPersistedProjectRecord,
+  createPersistedWorkspaceRecord,
+  type PersistedProjectRecord,
+  type PersistedWorkspaceRecord,
+} from "../../workspace-registry.js";
+import { createWorkspaceProvisioningService } from "../workspace-provisioning/workspace-provisioning-service.js";
+import { createWorkspaceRecoveryService } from "./workspace-recovery-service.js";
+
+const NOW = "2026-07-11T10:12:30.752Z";
+const tempDirectories: string[] = [];
+
+afterEach(() => {
+  for (const directory of tempDirectories.splice(0)) {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+function createProject(overrides: Partial<PersistedProjectRecord> = {}): PersistedProjectRecord {
+  return createPersistedProjectRecord({
+    projectId: "/project",
+    rootPath: "/project",
+    kind: "git",
+    displayName: "project",
+    createdAt: NOW,
+    updatedAt: NOW,
+    ...overrides,
+  });
+}
+
+function createWorkspace(
+  overrides: Partial<PersistedWorkspaceRecord> = {},
+): PersistedWorkspaceRecord {
+  return createPersistedWorkspaceRecord({
+    workspaceId: "wks_15a1b5630ebaab33",
+    projectId: "/project",
+    cwd: "/worktrees/trigger-1525443412986298439",
+    kind: "worktree",
+    displayName: "diagnose-repro-tdd",
+    title: "TDD reproduction",
+    branch: "diagnose-repro-tdd",
+    worktreeRoot: "/worktrees/trigger-1525443412986298439",
+    isRemioOwnedWorktree: true,
+    mainRepoRoot: "/repo",
+    createdAt: NOW,
+    updatedAt: NOW,
+    archivedAt: NOW,
+    ...overrides,
+  });
+}
+
+function createHarness(input?: {
+  workspace?: PersistedWorkspaceRecord | null;
+  project?: PersistedProjectRecord | null;
+  directories?: string[];
+  remioHome?: string;
+  worktreesRoot?: string;
+}) {
+  const workspace = input?.workspace === undefined ? createWorkspace() : input.workspace;
+  const project = input?.project === undefined ? createProject() : input.project;
+  const directories = new Set(input?.directories ?? ["/repo"]);
+  const unarchived: string[] = [];
+  const service = createWorkspaceRecoveryService({
+    remioHome: input?.remioHome ?? "/remio-home",
+    worktreesRoot: input?.worktreesRoot ?? "/worktrees",
+    getWorkspace: async (workspaceId) =>
+      workspace?.workspaceId === workspaceId ? workspace : null,
+    getProject: async (projectId) => (project?.projectId === projectId ? project : null),
+    isDirectory: async (path) => directories.has(path),
+    unarchiveWorkspace: async (record) => {
+      unarchived.push(record.workspaceId);
+    },
+  });
+  return { service, unarchived };
+}
+
+describe("workspace recovery", () => {
+  test("describes a missing archived worktree from persisted placement", async () => {
+    const { service, unarchived } = createHarness();
+
+    await expect(service.inspect("wks_15a1b5630ebaab33")).resolves.toEqual({
+      kind: "recoverable",
+      workspaceId: "wks_15a1b5630ebaab33",
+      workspaceName: "TDD reproduction",
+      action: "restore",
+      branch: "diagnose-repro-tdd",
+    });
+    expect(unarchived).toEqual([]);
+  });
+
+  test("unarchives an archived workspace whose exact directory remains", async () => {
+    const workspace = createWorkspace({ kind: "directory", branch: null });
+    const { service, unarchived } = createHarness({
+      workspace,
+      directories: [workspace.cwd],
+    });
+
+    await expect(service.restore(workspace.workspaceId)).resolves.toEqual({
+      workspaceId: workspace.workspaceId,
+      action: "unarchive",
+    });
+    expect(unarchived).toEqual([workspace.workspaceId]);
+  });
+
+  test("does not offer recovery for a missing non-worktree directory", async () => {
+    const workspace = createWorkspace({ kind: "directory", branch: null });
+    const { service } = createHarness({ workspace });
+
+    await expect(service.inspect(workspace.workspaceId)).resolves.toEqual({
+      kind: "unavailable",
+      workspaceId: workspace.workspaceId,
+      reason: "workspace_directory_missing",
+      message: "The archived workspace directory no longer exists and cannot be recreated.",
+    });
+  });
+
+  test("uses the persisted source repository instead of the owning project to restore an exact subdirectory", async () => {
+    const { tempDir, repoDir } = createGitRepository();
+    const branch = "feature/mixed-project";
+    const sourceSubdirectory = join(repoDir, "packages", "app");
+    mkdirSync(sourceSubdirectory, { recursive: true });
+    writeFileSync(join(sourceSubdirectory, "README.md"), "app\n");
+    execFileSync("git", ["add", "."], { cwd: repoDir, stdio: "pipe" });
+    execFileSync("git", ["commit", "-m", "add app"], { cwd: repoDir, stdio: "pipe" });
+    execFileSync("git", ["branch", branch], { cwd: repoDir, stdio: "pipe" });
+
+    const remioHome = join(tempDir, "remio-home");
+    const worktreesRoot = join(tempDir, "worktrees");
+    const created = await createWorktree({
+      cwd: repoDir,
+      worktreeSlug: "mixed-project",
+      source: { kind: "checkout-branch", branchName: branch },
+
+      remioHome,
+      worktreesRoot,
+    });
+    const worktreeRoot = realpathSync(created.worktreePath);
+    const workspaceCwd = join(worktreeRoot, "packages", "app");
+    rmSync(worktreeRoot, { recursive: true, force: true });
+    execFileSync("git", ["worktree", "prune"], { cwd: repoDir, stdio: "pipe" });
+
+    const projectRoot = join(tempDir, "explicit-non-git-project");
+    mkdirSync(projectRoot);
+    const project = createProject({
+      projectId: "explicit-non-git-project",
+      rootPath: projectRoot,
+      kind: "non_git",
+    });
+    const workspace = createWorkspace({
+      workspaceId: "ws-mixed-project-recreate",
+      projectId: project.projectId,
+      cwd: workspaceCwd,
+      branch,
+      worktreeRoot,
+      mainRepoRoot: repoDir,
+    });
+    const unarchived: string[] = [];
+    const service = createWorkspaceRecoveryService({
+      remioHome,
+      worktreesRoot,
+      getWorkspace: async (workspaceId) =>
+        workspaceId === workspace.workspaceId ? workspace : null,
+      getProject: async (projectId) => (projectId === project.projectId ? project : null),
+      isDirectory: async (path) => existsSync(path) && statSync(path).isDirectory(),
+      unarchiveWorkspace: async (record) => {
+        unarchived.push(record.workspaceId);
+      },
+    });
+
+    await expect(service.restore(workspace.workspaceId)).resolves.toEqual({
+      workspaceId: workspace.workspaceId,
+      action: "restore",
+    });
+    expect(existsSync(worktreeRoot)).toBe(true);
+    expect(existsSync(workspaceCwd)).toBe(true);
+    expect(unarchived).toEqual([workspace.workspaceId]);
+  });
+
+  test("keeps an exact-subdirectory workspace archived when its branch lacks that directory", async () => {
+    const { tempDir, repoDir } = createGitRepository();
+    const branch = "feature/without-subproject";
+    execFileSync("git", ["branch", branch], { cwd: repoDir, stdio: "pipe" });
+    const remioHome = join(tempDir, "remio-home");
+    const worktreesRoot = join(tempDir, "worktrees");
+    const created = await createWorktree({
+      cwd: repoDir,
+      worktreeSlug: "without-subproject",
+      source: { kind: "checkout-branch", branchName: branch },
+
+      remioHome,
+      worktreesRoot,
+    });
+    const worktreeRoot = realpathSync(created.worktreePath);
+    const workspaceCwd = join(worktreeRoot, "packages", "app");
+    rmSync(worktreeRoot, { recursive: true, force: true });
+    execFileSync("git", ["worktree", "prune"], { cwd: repoDir, stdio: "pipe" });
+
+    const project = createProject({ rootPath: repoDir });
+    const workspace = createWorkspace({
+      workspaceId: "ws-missing-restored-subdirectory",
+      cwd: workspaceCwd,
+      branch,
+      worktreeRoot,
+      mainRepoRoot: repoDir,
+    });
+    const unarchived: string[] = [];
+    const service = createWorkspaceRecoveryService({
+      remioHome,
+      worktreesRoot,
+      getWorkspace: async (workspaceId) =>
+        workspaceId === workspace.workspaceId ? workspace : null,
+      getProject: async (projectId) => (projectId === project.projectId ? project : null),
+      isDirectory: async (targetPath) =>
+        existsSync(targetPath) && statSync(targetPath).isDirectory(),
+      unarchiveWorkspace: async (record) => {
+        unarchived.push(record.workspaceId);
+      },
+    });
+
+    await expect(service.restore(workspace.workspaceId)).rejects.toThrow(
+      "Selected project directory is missing from the restored worktree",
+    );
+    expect(unarchived).toEqual([]);
+    expect(existsSync(worktreeRoot)).toBe(false);
+    expect(
+      execFileSync("git", ["worktree", "list", "--porcelain"], {
+        cwd: repoDir,
+        stdio: "pipe",
+      })
+        .toString()
+        .includes("without-subproject"),
+    ).toBe(false);
+  });
+
+  test("keeps the workspace archived when its persisted source repository is missing", async () => {
+    const workspace = createWorkspace({ mainRepoRoot: "/missing-source" });
+    const { service, unarchived } = createHarness({
+      workspace,
+      directories: ["/project"],
+    });
+
+    await expect(service.inspect(workspace.workspaceId)).resolves.toEqual({
+      kind: "unavailable",
+      workspaceId: workspace.workspaceId,
+      reason: "project_directory_missing",
+      message: "The source repository needed to restore this worktree no longer exists.",
+    });
+    await expect(service.restore(workspace.workspaceId)).rejects.toThrow(
+      "The source repository needed to restore this worktree no longer exists.",
+    );
+    expect(unarchived).toEqual([]);
+  });
+});
+
+function createGitRepository(): { tempDir: string; repoDir: string } {
+  const tempDir = mkdtempSync(join(tmpdir(), "remio-workspace-recovery-"));
+  tempDirectories.push(tempDir);
+  const repoDir = join(tempDir, "repo");
+  mkdirSync(repoDir);
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "test@example.com"], {
+    cwd: repoDir,
+    stdio: "pipe",
+  });
+  execFileSync("git", ["config", "user.name", "Remio Test"], {
+    cwd: repoDir,
+    stdio: "pipe",
+  });
+  writeFileSync(join(repoDir, "README.md"), "initial\n");
+  execFileSync("git", ["add", "."], { cwd: repoDir, stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "initial"], { cwd: repoDir, stdio: "pipe" });
+  return { tempDir, repoDir };
+}
+
+async function createBaseRecoveryFixture(
+  baseBranch: string | null,
+  options: { bareSource?: boolean } = {},
+) {
+  const { tempDir, repoDir: checkoutDir } = createGitRepository();
+  const repoDir = options.bareSource ? join(realpathSync(tempDir), "repo.git") : checkoutDir;
+  if (options.bareSource) {
+    execFileSync("git", ["clone", "--bare", "-q", checkoutDir, repoDir], { stdio: "pipe" });
+    // A bare clone does not copy the checkout's local config; its linked worktrees share this one.
+    for (const [key, value] of [
+      ["user.name", "Remio Test"],
+      ["user.email", "test@example.com"],
+      ["core.autocrlf", "false"],
+    ]) {
+      execFileSync("git", ["--git-dir", repoDir, "config", key, value], { stdio: "pipe" });
+    }
+  }
+  const remioHome = join(tempDir, "remio-home");
+  const created = await createWorktree({
+    cwd: repoDir,
+    remioHome,
+    worktreeSlug: "base-recovery",
+    source: { kind: "branch-off", branchName: "feature", baseBranch: "main" },
+  });
+  writeFileSync(join(created.worktreePath, "feature.txt"), "feature\n");
+  execFileSync("git", ["add", "."], { cwd: created.worktreePath });
+  execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-m", "feature"], {
+    cwd: created.worktreePath,
+    stdio: "pipe",
+  });
+  const workspace = createWorkspace({
+    workspaceId: "base-recovery",
+    cwd: created.worktreePath,
+    worktreeRoot: created.worktreePath,
+    mainRepoRoot: repoDir,
+    branch: "feature",
+    baseBranch,
+    archivedAt: null,
+  });
+  const project = createProject({ rootPath: repoDir });
+  const registry = new FileBackedWorkspaceRegistry(
+    join(tempDir, "workspaces.json"),
+    pino({ level: "silent" }),
+  );
+  await registry.upsert(workspace);
+  const service = createWorkspaceRecoveryService({
+    remioHome,
+    getWorkspace: (id) => registry.get(id),
+    getProject: async () => project,
+    isDirectory: async (target) => existsSync(target) && statSync(target).isDirectory(),
+    unarchiveWorkspace: async (record) => {
+      await registry.update(record.workspaceId, (value) => ({ ...value, archivedAt: null }));
+    },
+  });
+  async function archiveAndRemove(legacy = false) {
+    if (legacy) {
+      await registry.archive(workspace.workspaceId, new Date().toISOString());
+    } else {
+      await archivePersistedWorkspaceRecord({
+        workspaceId: workspace.workspaceId,
+        workspaceRegistry: registry,
+      });
+    }
+    await deleteRemioWorktree({ cwd: repoDir, worktreePath: workspace.cwd, remioHome });
+    expect(existsSync(workspace.cwd)).toBe(false);
+  }
+  return { workspace, registry, service, remioHome, repoDir, tempDir, archiveAndRemove };
+}
+
+test("preserves ordinary checkout behavior when no separate base was recorded", async () => {
+  const fixture = await createBaseRecoveryFixture(null);
+  await writeRemioWorktreeMetadata(fixture.workspace.cwd, { baseRefName: "feature" });
+  await fixture.archiveAndRemove();
+  await fixture.service.restore(fixture.workspace.workspaceId);
+  expect((await fixture.registry.get(fixture.workspace.workspaceId))?.baseBranch).toBeNull();
+  expect(
+    await getCheckoutStatus(fixture.workspace.cwd, { remioHome: fixture.remioHome }),
+  ).toMatchObject({ currentBranch: "feature", baseRef: "feature" });
+});
+
+test("records the full HEAD ref of an archived checkout", async () => {
+  const fixture = await createBaseRecoveryFixture(null);
+  await fixture.archiveAndRemove();
+  expect(await fixture.registry.get(fixture.workspace.workspaceId)).toMatchObject({
+    branch: "feature",
+    head: "refs/heads/feature",
+  });
+});
+
+test("archives a workspace whose worktree Git administration is missing", async () => {
+  const fixture = await createBaseRecoveryFixture(null);
+  const gitDir = execFileSync("git", ["rev-parse", "--absolute-git-dir"], {
+    cwd: fixture.workspace.cwd,
+    encoding: "utf8",
+  }).trim();
+  rmSync(gitDir, { recursive: true, force: true });
+  await archivePersistedWorkspaceRecord({
+    workspaceId: fixture.workspace.workspaceId,
+    workspaceRegistry: fixture.registry,
+  });
+  expect((await fixture.registry.get(fixture.workspace.workspaceId))?.archivedAt).toBeTruthy();
+});
+
+test("restores a branch that shares its name with a tag", async () => {
+  const fixture = await createBaseRecoveryFixture("main");
+  execFileSync("git", ["tag", "feature"], { cwd: fixture.repoDir });
+  await fixture.archiveAndRemove();
+  expect((await fixture.registry.get(fixture.workspace.workspaceId))?.head).toBe(
+    "refs/heads/feature",
+  );
+  expect(await fixture.service.inspect(fixture.workspace.workspaceId)).toMatchObject({
+    branch: "feature",
+  });
+  await fixture.service.restore(fixture.workspace.workspaceId);
+  expect(
+    execFileSync("git", ["symbolic-ref", "HEAD"], {
+      cwd: fixture.workspace.cwd,
+      encoding: "utf8",
+    }).trim(),
+  ).toBe("refs/heads/feature");
+});
+
+test("restores detached HEAD even when the stored branch is stale", async () => {
+  const fixture = await createBaseRecoveryFixture("main");
+  execFileSync("git", ["switch", "--detach"], { cwd: fixture.workspace.cwd });
+  const commit = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: fixture.workspace.cwd,
+    encoding: "utf8",
+  }).trim();
+  await fixture.archiveAndRemove();
+  expect(await fixture.registry.get(fixture.workspace.workspaceId)).toMatchObject({
+    branch: "feature",
+    head: commit,
+  });
+  expect(await fixture.service.inspect(fixture.workspace.workspaceId)).toMatchObject({
+    branch: null,
+  });
+  await fixture.service.restore(fixture.workspace.workspaceId);
+  expect(
+    execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      cwd: fixture.workspace.cwd,
+      encoding: "utf8",
+    }).trim(),
+  ).toBe("HEAD");
+  expect(
+    execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: fixture.workspace.cwd,
+      encoding: "utf8",
+    }).trim(),
+  ).toBe(commit);
+});
+
+test.each(["manual", "reconciliation"] as const)(
+  "a later %s archive without a readable HEAD restores the latest recorded branch",
+  async (route) => {
+    const fixture = await createBaseRecoveryFixture("main");
+    await fixture.archiveAndRemove();
+    await fixture.service.restore(fixture.workspace.workspaceId);
+    execFileSync("git", ["switch", "-c", "feature-b"], { cwd: fixture.workspace.cwd });
+    writeFileSync(join(fixture.workspace.cwd, "newer.txt"), "newer\n");
+    execFileSync("git", ["add", "newer.txt"], { cwd: fixture.workspace.cwd });
+    execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-m", "newer"], {
+      cwd: fixture.workspace.cwd,
+    });
+    const commit = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: fixture.workspace.cwd,
+      encoding: "utf8",
+    }).trim();
+    // Placement reconciliation records the branch observed while the workspace is active.
+    await fixture.registry.update(fixture.workspace.workspaceId, (workspace) => ({
+      ...workspace,
+      branch: "feature-b",
+    }));
+    execFileSync("git", ["worktree", "remove", "--force", fixture.workspace.cwd], {
+      cwd: fixture.repoDir,
+    });
+    if (route === "manual") {
+      await archivePersistedWorkspaceRecord({
+        workspaceId: fixture.workspace.workspaceId,
+        workspaceRegistry: fixture.registry,
+      });
+    } else {
+      await fixture.registry.archive(fixture.workspace.workspaceId, new Date().toISOString());
+    }
+
+    expect(await fixture.registry.get(fixture.workspace.workspaceId)).toMatchObject({
+      branch: "feature-b",
+      head: undefined,
+    });
+    expect(await fixture.service.inspect(fixture.workspace.workspaceId)).toMatchObject({
+      branch: "feature-b",
+    });
+    await fixture.service.restore(fixture.workspace.workspaceId);
+    expect(
+      execFileSync("git", ["symbolic-ref", "HEAD"], {
+        cwd: fixture.workspace.cwd,
+        encoding: "utf8",
+      }).trim(),
+    ).toBe("refs/heads/feature-b");
+    expect(
+      execFileSync("git", ["rev-parse", "HEAD"], {
+        cwd: fixture.workspace.cwd,
+        encoding: "utf8",
+      }).trim(),
+    ).toBe(commit);
+  },
+);
+
+test("restores a branchless workspace from its recorded base so work can continue", async () => {
+  const fixture = await createBaseRecoveryFixture("refs/heads/release");
+  execFileSync("git", ["switch", "-c", "release"], { cwd: fixture.repoDir, stdio: "pipe" });
+  writeFileSync(join(fixture.repoDir, "release.txt"), "release\n");
+  execFileSync("git", ["add", "release.txt"], { cwd: fixture.repoDir, stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "release"], { cwd: fixture.repoDir, stdio: "pipe" });
+  execFileSync("git", ["switch", "main"], { cwd: fixture.repoDir, stdio: "pipe" });
+  await fixture.registry.update(fixture.workspace.workspaceId, (workspace) => ({
+    ...workspace,
+    branch: null,
+  }));
+  await fixture.archiveAndRemove(true);
+
+  await expect(fixture.service.inspect(fixture.workspace.workspaceId)).resolves.toMatchObject({
+    kind: "recoverable",
+    action: "restore",
+    branch: null,
+  });
+  await expect(fixture.service.restore(fixture.workspace.workspaceId)).resolves.toEqual({
+    workspaceId: fixture.workspace.workspaceId,
+    action: "restore",
+  });
+
+  const checkout = await getCheckoutStatus(fixture.workspace.cwd, { remioHome: fixture.remioHome });
+  expect(checkout.currentBranch).toBeTruthy();
+  expect(checkout.currentBranch).not.toBe("feature");
+  expect(
+    execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: fixture.workspace.cwd,
+      encoding: "utf8",
+    }).trim(),
+  ).toBe(
+    execFileSync("git", ["rev-parse", "release"], {
+      cwd: fixture.repoDir,
+      encoding: "utf8",
+    }).trim(),
+  );
+});
+
+test("restores a branchless workspace from the repository default when its base is missing", async () => {
+  const fixture = await createBaseRecoveryFixture("refs/heads/deleted-base");
+  await fixture.registry.update(fixture.workspace.workspaceId, (workspace) => ({
+    ...workspace,
+    branch: null,
+  }));
+  await fixture.archiveAndRemove(true);
+
+  await expect(fixture.service.restore(fixture.workspace.workspaceId)).resolves.toEqual({
+    workspaceId: fixture.workspace.workspaceId,
+    action: "restore",
+  });
+  expect(
+    execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: fixture.workspace.cwd,
+      encoding: "utf8",
+    }).trim(),
+  ).toBe(
+    execFileSync("git", ["rev-parse", "main"], { cwd: fixture.repoDir, encoding: "utf8" }).trim(),
+  );
+});
+
+test("restores the archived detached checkout at its recorded commit", async () => {
+  const fixture = await createBaseRecoveryFixture("refs/heads/main");
+  execFileSync("git", ["switch", "--detach"], { cwd: fixture.workspace.cwd });
+  writeFileSync(join(fixture.workspace.cwd, "detached.txt"), "detached\n");
+  execFileSync("git", ["add", "detached.txt"], { cwd: fixture.workspace.cwd });
+  execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-m", "detached"], {
+    cwd: fixture.workspace.cwd,
+  });
+  const commit = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: fixture.workspace.cwd,
+    encoding: "utf8",
+  }).trim();
+  await fixture.archiveAndRemove();
+  expect(await fixture.registry.get(fixture.workspace.workspaceId)).toMatchObject({
+    branch: "feature",
+    head: commit,
+  });
+  execFileSync("git", ["reflog", "expire", "--expire=now", "--all"], { cwd: fixture.repoDir });
+  execFileSync("git", ["gc", "--prune=now"], { cwd: fixture.repoDir });
+  await fixture.service.restore(fixture.workspace.workspaceId);
+  expect(await readRemioWorktreeMetadata(fixture.workspace.cwd)).toMatchObject({
+    baseRefName: "main",
+    baseRef: "refs/heads/main",
+  });
+  expect(
+    execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: fixture.workspace.cwd,
+      encoding: "utf8",
+    }).trim(),
+  ).toBe(commit);
+  expect(
+    execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      cwd: fixture.workspace.cwd,
+      encoding: "utf8",
+    }).trim(),
+  ).toBe("HEAD");
+});
+
+test("restores the branch HEAD with a base name when the exact base is missing", async () => {
+  const fixture = await createBaseRecoveryFixture("refs/remotes/upstream/main");
+  const headBeforeArchive = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: fixture.workspace.cwd,
+    encoding: "utf8",
+  }).trim();
+  await fixture.archiveAndRemove();
+  await expect(fixture.service.restore(fixture.workspace.workspaceId)).resolves.toEqual({
+    workspaceId: fixture.workspace.workspaceId,
+    action: "restore",
+  });
+  expect(existsSync(fixture.workspace.cwd)).toBe(true);
+  expect((await fixture.registry.get(fixture.workspace.workspaceId))?.archivedAt).toBeNull();
+  const metadata = await readRemioWorktreeMetadata(fixture.workspace.cwd);
+  expect(metadata).toMatchObject({ baseRefName: "main" });
+  expect(metadata?.baseRef).toBeUndefined();
+  expect(
+    execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: fixture.workspace.cwd,
+      encoding: "utf8",
+    }).trim(),
+  ).toBe(headBeforeArchive);
+});
+
+test("restore fetches a deleted local branch from origin and retains its base", async () => {
+  const fixture = await createBaseRecoveryFixture("refs/heads/main");
+  const remote = join(fixture.tempDir, "remote.git");
+  execFileSync("git", ["init", "--bare", remote], { stdio: "pipe" });
+  execFileSync("git", ["remote", "add", "origin", remote], { cwd: fixture.repoDir });
+  execFileSync("git", ["push", "origin", "feature"], { cwd: fixture.repoDir, stdio: "pipe" });
+  await fixture.archiveAndRemove();
+  execFileSync("git", ["branch", "-D", "feature"], { cwd: fixture.repoDir });
+  await fixture.service.restore(fixture.workspace.workspaceId);
+  expect((await readRemioWorktreeMetadata(fixture.workspace.cwd))?.baseRef).toBe("refs/heads/main");
+  expect(
+    await getCheckoutStatus(fixture.workspace.cwd, { remioHome: fixture.remioHome }),
+  ).toMatchObject({
+    currentBranch: "feature",
+    baseRef: "main",
+    aheadBehind: { ahead: 1, behind: 0 },
+  });
+});
+
+test("restore rejects a branch checked out elsewhere without inventing another branch", async () => {
+  const fixture = await createBaseRecoveryFixture("refs/heads/main");
+  await fixture.archiveAndRemove();
+  execFileSync("git", ["switch", "feature"], { cwd: fixture.repoDir, stdio: "pipe" });
+  await expect(fixture.service.restore(fixture.workspace.workspaceId)).rejects.toThrow(
+    /already checked out/,
+  );
+  expect(existsSync(fixture.workspace.cwd)).toBe(false);
+  expect((await fixture.registry.get(fixture.workspace.workspaceId))?.archivedAt).not.toBeNull();
+  expect(
+    execFileSync("git", ["branch", "--list", "feature*"], {
+      cwd: fixture.repoDir,
+      encoding: "utf8",
+    }).trim(),
+  ).toBe("* feature");
+});
+
+test("restores a workspace after the last checkout of a bare repository is archived", async () => {
+  const fixture = await createBaseRecoveryFixture("main", { bareSource: true });
+  await fixture.archiveAndRemove();
+
+  await expect(fixture.service.restore(fixture.workspace.workspaceId)).resolves.toEqual({
+    workspaceId: fixture.workspace.workspaceId,
+    action: "restore",
+  });
+  expect(readFileSync(join(fixture.workspace.cwd, "feature.txt"), "utf8")).toBe("feature\n");
+  expect(
+    execFileSync("git", ["symbolic-ref", "HEAD"], {
+      cwd: fixture.workspace.cwd,
+      encoding: "utf8",
+    }).trim(),
+  ).toBe("refs/heads/feature");
+});
+
+test("restores a user-created worktree at its recorded path outside Remio's root", async () => {
+  const { tempDir, repoDir } = createGitRepository();
+  const worktreeRoot = join(realpathSync(tempDir), "external-worktree");
+  execFileSync("git", ["worktree", "add", "-b", "external-feature", worktreeRoot], {
+    cwd: repoDir,
+    stdio: "pipe",
+  });
+  const workspace = createWorkspace({
+    cwd: worktreeRoot,
+    worktreeRoot,
+    mainRepoRoot: repoDir,
+    branch: "external-feature",
+    baseBranch: "main",
+    isRemioOwnedWorktree: false,
+  });
+  execFileSync("git", ["worktree", "remove", worktreeRoot], { cwd: repoDir, stdio: "pipe" });
+  const unarchived: string[] = [];
+  const service = createWorkspaceRecoveryService({
+    remioHome: join(tempDir, "remio-home"),
+    getWorkspace: async () => workspace,
+    getProject: async () => createProject({ rootPath: repoDir }),
+    isDirectory: async (target) => existsSync(target) && statSync(target).isDirectory(),
+    unarchiveWorkspace: async (record) => {
+      unarchived.push(record.workspaceId);
+    },
+  });
+  await expect(service.restore(workspace.workspaceId)).resolves.toEqual({
+    workspaceId: workspace.workspaceId,
+    action: "restore",
+  });
+  expect(readFileSync(join(worktreeRoot, "README.md"), "utf8").trim()).toBe("initial");
+  expect(
+    execFileSync("git", ["branch", "--show-current"], {
+      cwd: worktreeRoot,
+      encoding: "utf8",
+    }).trim(),
+  ).toBe("external-feature");
+  expect(unarchived).toEqual([workspace.workspaceId]);
+});
+
+describe("recovery approval ownership for shared archived history", () => {
+  async function setupSlugReuseHistory(options: { keepLatestCheckoutOnDisk: boolean }) {
+    const { tempDir, repoDir } = createGitRepository();
+    const remioHome = join(tempDir, "remio-home");
+    const workspaceRegistry = new FileBackedWorkspaceRegistry(
+      join(remioHome, "workspaces.json"),
+      pino({ level: "silent" }),
+    );
+    const projectRegistry = new FileBackedProjectRegistry(
+      join(remioHome, "projects.json"),
+      pino({ level: "silent" }),
+    );
+    const provisioning = createWorkspaceProvisioningService({
+      unarchiveWorkspaceAgents: async () => {},
+      workspaceRegistry,
+      projectRegistry,
+      workspaceGitService: {
+        getCheckout: async (cwd) => getCheckoutStatus(cwd),
+        getSnapshot: async () => ({
+          checkout: null,
+          forge: { pullRequest: null, checkedAt: null, error: null },
+        }),
+      },
+      isDirectory: async (target) => existsSync(target) && statSync(target).isDirectory(),
+      logger: pino({ level: "silent" }),
+    });
+
+    const firstWorktree = await createWorktree({
+      cwd: repoDir,
+      worktreeSlug: "shared-slug",
+      source: { kind: "branch-off", branchName: "feature/older-approved", baseBranch: "main" },
+      remioHome,
+    });
+    const olderApproved = await provisioning.createWorkspaceForWorktree({
+      sourceCwd: repoDir,
+      repoRoot: repoDir,
+      cwd: firstWorktree.worktreePath,
+      worktreeRoot: firstWorktree.worktreePath,
+      branch: firstWorktree.branchName,
+      baseBranch: firstWorktree.baseRef,
+      title: null,
+      isRemioOwnedWorktree: true,
+    });
+    await workspaceRegistry.archive(olderApproved.workspaceId, "2026-04-01T00:00:00.000Z");
+    await deleteRemioWorktree({
+      cwd: repoDir,
+      worktreePath: firstWorktree.worktreePath,
+      remioHome,
+    });
+
+    const untrustedSource = {
+      kind: "change_request" as const,
+      forge: "github",
+      number: 72,
+      headRepository: "contributor/repo",
+    };
+    const secondWorktree = await createWorktree({
+      cwd: repoDir,
+      worktreeSlug: "shared-slug",
+      source: { kind: "branch-off", branchName: "contributor/pr-72", baseBranch: "main" },
+      remioHome,
+    });
+    await writeRemioWorktreeMetadata(secondWorktree.worktreePath, {
+      baseRefName: "main",
+      untrustedSource,
+    });
+    const laterUntrusted = await provisioning.createWorkspaceForWorktree({
+      sourceCwd: repoDir,
+      repoRoot: repoDir,
+      cwd: secondWorktree.worktreePath,
+      worktreeRoot: secondWorktree.worktreePath,
+      branch: secondWorktree.branchName,
+      baseBranch: secondWorktree.baseRef,
+      title: null,
+      isRemioOwnedWorktree: true,
+      untrustedSource,
+    });
+    await workspaceRegistry.archive(laterUntrusted.workspaceId, "2026-04-02T00:00:00.000Z");
+    if (!options.keepLatestCheckoutOnDisk) {
+      await deleteRemioWorktree({
+        cwd: repoDir,
+        worktreePath: secondWorktree.worktreePath,
+        remioHome,
+      });
+    }
+
+    const recovery = createWorkspaceRecoveryService({
+      remioHome,
+      getWorkspace: (id) => workspaceRegistry.get(id),
+      getProject: (id) => projectRegistry.get(id),
+      isDirectory: async (target) => existsSync(target) && statSync(target).isDirectory(),
+      unarchiveWorkspace: async (workspace) => {
+        await provisioning.ensureWorkspaceRecordUnarchived(workspace);
+      },
+    });
+
+    return {
+      olderApproved,
+      untrustedSource,
+      worktreePath: firstWorktree.worktreePath,
+      workspaceRegistry,
+      recovery,
+    };
+  }
+
+  test("restoring a deleted approved workspace after slug reuse keeps the recreated worktree approved", async () => {
+    const { olderApproved, worktreePath, workspaceRegistry, recovery } =
+      await setupSlugReuseHistory({ keepLatestCheckoutOnDisk: false });
+
+    const result = await recovery.restore(olderApproved.workspaceId);
+
+    expect(result).toEqual({ workspaceId: olderApproved.workspaceId, action: "restore" });
+    const restored = await workspaceRegistry.get(olderApproved.workspaceId);
+    expect(restored?.archivedAt).toBeNull();
+    expect(restored?.untrustedSource).toBeUndefined();
+    expect((await readRemioWorktreeMetadata(worktreePath))?.untrustedSource).toBeUndefined();
+  });
+
+  test("unarchiving onto a retained unapproved checkout inherits untrustedSource from worktree metadata", async () => {
+    const { olderApproved, untrustedSource, workspaceRegistry, recovery } =
+      await setupSlugReuseHistory({ keepLatestCheckoutOnDisk: true });
+
+    const result = await recovery.restore(olderApproved.workspaceId);
+
+    expect(result).toEqual({ workspaceId: olderApproved.workspaceId, action: "unarchive" });
+    const restored = await workspaceRegistry.get(olderApproved.workspaceId);
+    expect(restored?.archivedAt).toBeNull();
+    expect(restored?.untrustedSource).toEqual(untrustedSource);
+  });
+});

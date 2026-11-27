@@ -1,0 +1,6 @@
+{
+  "id": "inline-thinking",
+  "requirements": {
+    "remio": ">=0.0.1"
+  }
+}

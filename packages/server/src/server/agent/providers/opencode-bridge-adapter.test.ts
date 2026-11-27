@@ -1,0 +1,171 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+import { afterEach, describe, expect, test } from "vitest";
+
+import { createTestLogger } from "../../../test-utils/test-logger.js";
+import { OpenCodeAgentClient } from "./opencode-agent.js";
+import { OpenCodeBridge } from "./opencode/bridge.js";
+import {
+  TestOpenCodeClient,
+  TestOpenCodeHarness,
+} from "./opencode/test-utils/test-opencode-harness.js";
+
+describe("OpenCode bridge adapter", () => {
+  const cleanups: Array<() => Promise<void>> = [];
+
+  afterEach(async () => {
+    await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
+  });
+
+  test("shares the server and binds exact managed env per OpenCode session", async () => {
+    const remioHome = await mkdtemp(path.join(os.tmpdir(), "remio-opencode-adapter-"));
+    const bridge = new OpenCodeBridge({ remioHome, logger: createTestLogger() });
+    await bridge.start();
+    cleanups.push(async () => {
+      await bridge.close();
+      await rm(remioHome, { recursive: true, force: true });
+    });
+
+    const runtime = new TestOpenCodeHarness();
+    const firstClient = new TestOpenCodeClient();
+    const secondClient = new TestOpenCodeClient();
+    firstClient.sessionCreateResponse = { data: { id: "ses_first" } };
+    secondClient.sessionCreateResponse = { data: { id: "ses_second" } };
+    runtime.enqueueClient(firstClient);
+    runtime.enqueueClient(secondClient);
+    const client = new OpenCodeAgentClient(createTestLogger(), undefined, {
+      serverManager: runtime,
+      createClient: runtime.createClient,
+      bridge,
+    });
+
+    const first = await client.createSession(
+      { provider: "opencode", cwd: "/workspace/one" },
+      {
+        agentId: "agent-one",
+        env: { REMIO_AGENT_ID: "agent-one", REMIO_AGENT_CWD: "/workspace/one" },
+      },
+    );
+    const second = await client.createSession(
+      { provider: "opencode", cwd: "/workspace/two" },
+      {
+        agentId: "agent-two",
+        env: { REMIO_AGENT_ID: "agent-two", REMIO_AGENT_CWD: "/workspace/two" },
+      },
+    );
+
+    expect(client.capabilities.supportsNativeRemioTools).toBe(true);
+    expect(runtime.acquisitions.map(({ kind }) => kind)).toEqual(["current", "current"]);
+    await expect(readBridgeContext(bridge, "ses_first")).resolves.toEqual({
+      env: { REMIO_AGENT_ID: "agent-one", REMIO_AGENT_CWD: "/workspace/one" },
+    });
+    await expect(readBridgeContext(bridge, "ses_second")).resolves.toEqual({
+      env: { REMIO_AGENT_ID: "agent-two", REMIO_AGENT_CWD: "/workspace/two" },
+    });
+
+    await first.close();
+    await expect(readBridgeContext(bridge, "ses_first")).rejects.toThrow("404");
+    await expect(readBridgeContext(bridge, "ses_second")).resolves.toBeDefined();
+    await second.close();
+  });
+
+  test("keeps process-scoped env and directory-scoped MCP on dedicated servers", async () => {
+    const remioHome = await mkdtemp(path.join(os.tmpdir(), "remio-opencode-adapter-"));
+    const bridge = new OpenCodeBridge({ remioHome, logger: createTestLogger() });
+    await bridge.start();
+    cleanups.push(async () => {
+      await bridge.close();
+      await rm(remioHome, { recursive: true, force: true });
+    });
+    const runtime = new TestOpenCodeHarness();
+    const envClient = new TestOpenCodeClient();
+    const mcpClient = new TestOpenCodeClient();
+    envClient.sessionCreateResponse = { data: { id: "ses_env" } };
+    mcpClient.sessionCreateResponse = { data: { id: "ses_mcp" } };
+    runtime.enqueueClient(envClient);
+    runtime.enqueueClient(mcpClient);
+    const client = new OpenCodeAgentClient(createTestLogger(), undefined, {
+      serverManager: runtime,
+      createClient: runtime.createClient,
+      bridge,
+    });
+
+    const customEnv = await client.createSession(
+      { provider: "opencode", cwd: "/workspace/one" },
+      { env: { REMIO_AGENT_ID: "one", CUSTOM_TOKEN: "secret" } },
+    );
+    const customMcp = await client.createSession(
+      {
+        provider: "opencode",
+        cwd: "/workspace/two",
+        mcpServers: { custom: { transport: "http", url: "http://127.0.0.1:9999/mcp" } },
+      },
+      { env: { REMIO_AGENT_ID: "two" } },
+    );
+
+    expect(runtime.acquisitions.map(({ kind }) => kind)).toEqual(["dedicated", "dedicated"]);
+    await expect(readBridgeContext(bridge, "ses_env")).resolves.toEqual({
+      env: { REMIO_AGENT_ID: "one", CUSTOM_TOKEN: "secret" },
+    });
+    await expect(readBridgeContext(bridge, "ses_mcp")).resolves.toEqual({
+      env: { REMIO_AGENT_ID: "two" },
+    });
+    await customEnv.close();
+    await customMcp.close();
+  });
+
+  test("starts a wrapped session on its own server behind the wrap", async () => {
+    const remioHome = await mkdtemp(path.join(os.tmpdir(), "remio-opencode-adapter-"));
+    const bridge = new OpenCodeBridge({ remioHome, logger: createTestLogger() });
+    await bridge.start();
+    cleanups.push(async () => {
+      await bridge.close();
+      await rm(remioHome, { recursive: true, force: true });
+    });
+    const runtime = new TestOpenCodeHarness();
+    const wrappedClient = new TestOpenCodeClient();
+    const sharedClient = new TestOpenCodeClient();
+    wrappedClient.sessionCreateResponse = { data: { id: "ses_wrapped" } };
+    sharedClient.sessionCreateResponse = { data: { id: "ses_shared" } };
+    runtime.enqueueClient(wrappedClient);
+    runtime.enqueueClient(sharedClient);
+    const client = new OpenCodeAgentClient(createTestLogger(), undefined, {
+      serverManager: runtime,
+      createClient: runtime.createClient,
+      bridge,
+    });
+
+    const wrapped = await client.createSession(
+      { provider: "opencode", cwd: "/workspace/one" },
+      { env: { REMIO_AGENT_ID: "one" }, wrap: ["/opt/sandbox/bin/run", "--profile", "a b"] },
+    );
+    const shared = await client.createSession(
+      { provider: "opencode", cwd: "/workspace/two" },
+      { env: { REMIO_AGENT_ID: "two" } },
+    );
+
+    expect(runtime.acquisitions.map(({ kind, wrap }) => ({ kind, wrap }))).toEqual([
+      { kind: "dedicated", wrap: ["/opt/sandbox/bin/run", "--profile", "a b"] },
+      { kind: "current", wrap: undefined },
+    ]);
+    await wrapped.close();
+    await shared.close();
+  });
+});
+
+async function readBridgeContext(bridge: OpenCodeBridge, sessionId: string): Promise<unknown> {
+  const decorated = bridge.decorateServerEnv({});
+  const config = JSON.parse(decorated.OPENCODE_CONFIG_CONTENT);
+  const [, options] = config.plugin[0];
+  const response = await fetch(
+    new URL(
+      `/_internal/opencode/sessions/${encodeURIComponent(sessionId)}/context`,
+      options.baseUrl,
+    ),
+    { headers: { Authorization: `Bearer ${options.token}` } },
+  );
+  if (!response.ok) throw new Error(`OpenCode bridge returned ${response.status}`);
+  return response.json();
+}

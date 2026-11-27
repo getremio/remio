@@ -1,0 +1,7 @@
+{
+  "id": "modal-ui-example",
+  "requirements": {
+    "remio": ">=0.0.1"
+  },
+  "description": "Interactive modal forms, scrolling lists, and clipboard examples"
+}

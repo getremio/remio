@@ -1,0 +1,6 @@
+{
+  "id": "lifecycle-logger",
+  "requirements": {
+    "remio": ">=0.0.1"
+  }
+}

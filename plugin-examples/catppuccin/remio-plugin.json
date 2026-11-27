@@ -1,0 +1,6 @@
+{
+  "id": "catppuccin",
+  "requirements": {
+    "remio": ">=0.0.1"
+  }
+}

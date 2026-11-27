@@ -1,0 +1,6 @@
+{
+  "id": "markdown-panel",
+  "requirements": {
+    "remio": ">=0.0.1"
+  }
+}

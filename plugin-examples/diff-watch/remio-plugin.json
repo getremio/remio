@@ -1,0 +1,6 @@
+{
+  "id": "diff-watch",
+  "requirements": {
+    "remio": ">=0.0.1"
+  }
+}

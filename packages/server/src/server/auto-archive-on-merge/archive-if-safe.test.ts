@@ -1,0 +1,699 @@
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import type { Logger } from "pino";
+import pino from "pino";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+
+import {
+  archiveIfSafe,
+  type ArchiveIfSafeDependencies,
+  type AutoArchiveArchiveOptions,
+} from "./archive-if-safe.js";
+import type { ArchiveResult, ActiveWorkspaceRef } from "../workspace-archive-service.js";
+import type { WorkspaceGitRuntimeSnapshot } from "../workspace-git-service.js";
+import { createWorktree, type WorktreeConfig } from "../../utils/worktree.js";
+import type { ForgeService } from "../../../services/forge-service.js";
+import type { StoredAgentRecord } from "../agent/agent-storage.js";
+
+const CWD = "/tmp/remio/worktrees/repo/branch";
+const REMIO_HOME = "/tmp/remio";
+const WORKTREES_ROOT = "/tmp/remio/worktrees/repo";
+
+function createPullRequest(
+  overrides?: Partial<NonNullable<WorkspaceGitRuntimeSnapshot["forge"]["pullRequest"]>>,
+): NonNullable<WorkspaceGitRuntimeSnapshot["forge"]["pullRequest"]> {
+  return {
+    url: "https://github.com/acme/repo/pull/123",
+    title: "Merge me",
+    state: "open",
+    baseRefName: "main",
+    headRefName: "feature",
+    headSha: "same-head",
+    isMerged: true,
+    ...overrides,
+  };
+}
+
+function createSnapshot(overrides?: {
+  git?: Partial<WorkspaceGitRuntimeSnapshot["git"]>;
+  pullRequest?: WorkspaceGitRuntimeSnapshot["forge"]["pullRequest"];
+}): WorkspaceGitRuntimeSnapshot {
+  return {
+    cwd: CWD,
+    git: {
+      isGit: true,
+      repoRoot: "/tmp/repo",
+      mainRepoRoot: "/tmp/repo",
+      currentBranch: "feature",
+      headSha: "same-head",
+      remoteUrl: "https://github.com/acme/repo.git",
+      isRemioOwnedWorktree: true,
+      isDirty: false,
+      baseRef: "main",
+      aheadBehind: { ahead: 0, behind: 0 },
+      aheadOfOrigin: 0,
+      behindOfOrigin: 0,
+      hasRemote: true,
+      diffStat: { additions: 0, deletions: 0 },
+      ...overrides?.git,
+    },
+    forge: {
+      featuresEnabled: true,
+      authState: "authenticated",
+      pullRequest:
+        overrides && "pullRequest" in overrides
+          ? (overrides.pullRequest ?? null)
+          : createPullRequest(),
+      error: null,
+    },
+  };
+}
+
+function createLogger(): Logger {
+  const logger = {
+    child: () => logger,
+    info: vi.fn(),
+    warn: vi.fn(),
+  };
+  return logger as unknown as Logger;
+}
+
+function createHarness(overrides?: {
+  autoArchivedChangeRequestUrl?: string | null;
+  snapshot?: WorkspaceGitRuntimeSnapshot;
+  isRemioOwnedWorktreeCwd?: ArchiveIfSafeDependencies["isRemioOwnedWorktreeCwd"];
+  archiveByScope?: ArchiveIfSafeDependencies["archiveByScope"];
+}) {
+  const getSnapshot = vi.fn(async () =>
+    createSnapshot(),
+  ) as unknown as AutoArchiveArchiveOptions["workspaceGitService"]["getSnapshot"];
+  const workspaceGitService = {
+    getSnapshot,
+  } as unknown as AutoArchiveArchiveOptions["workspaceGitService"];
+  const options: AutoArchiveArchiveOptions = {
+    remioHome: REMIO_HOME,
+    daemonConfigStore: {
+      get: () => ({ autoArchiveAfterMerge: true }),
+    } as unknown as AutoArchiveArchiveOptions["daemonConfigStore"],
+    workspaceGitService,
+    github: {} as AutoArchiveArchiveOptions["github"],
+    agentManager: {} as AutoArchiveArchiveOptions["agentManager"],
+    agentStorage: {} as AutoArchiveArchiveOptions["agentStorage"],
+    terminalManager: {} as AutoArchiveArchiveOptions["terminalManager"],
+    findWorkspaceIdForCwd: vi.fn(async () => "ws-auto-archive"),
+    listActiveWorkspaces: vi.fn(async () => []),
+    getAutoArchivedChangeRequestUrl: vi.fn(
+      async () => overrides?.autoArchivedChangeRequestUrl ?? null,
+    ),
+    archiveWorkspaceRecord: vi.fn(),
+    markWorkspaceArchiving: vi.fn(),
+    clearWorkspaceArchiving: vi.fn(),
+    emitWorkspaceUpdatesForWorkspaceIds: vi.fn(),
+    assertWorkspaceAutomationAllowed: vi.fn(async () => undefined),
+    isCheckoutUntrusted: vi.fn(async () => false),
+  };
+  const archiveByScope = vi.fn(
+    overrides?.archiveByScope ??
+      (async () =>
+        ({
+          archivedAgentIds: [],
+          archivedWorkspaceIds: [],
+          removedDirectory: false,
+        }) satisfies ArchiveResult),
+  ) as unknown as ArchiveIfSafeDependencies["archiveByScope"];
+  const isRemioOwnedWorktreeCwd = vi.fn(
+    overrides?.isRemioOwnedWorktreeCwd ??
+      (async () => ({
+        allowed: true,
+        repoRoot: "/tmp/repo",
+        worktreeRoot: WORKTREES_ROOT,
+        worktreePath: CWD,
+      })),
+  ) as unknown as ArchiveIfSafeDependencies["isRemioOwnedWorktreeCwd"];
+  const deps: ArchiveIfSafeDependencies = {
+    archiveByScope,
+    isRemioOwnedWorktreeCwd,
+    killTerminalsForWorkspace: vi.fn(),
+  };
+  const log = createLogger();
+  return {
+    deps,
+    getSnapshot,
+    log,
+    options,
+    snapshot: overrides?.snapshot ?? createSnapshot(),
+  };
+}
+
+async function runArchiveIfSafe(
+  harness: ReturnType<typeof createHarness>,
+  overrides?: {
+    workspaceId?: string;
+    snapshot?: WorkspaceGitRuntimeSnapshot;
+    pullRequest?: WorkspaceGitRuntimeSnapshot["forge"]["pullRequest"];
+  },
+): Promise<void> {
+  await archiveIfSafe({
+    workspaceId: overrides?.workspaceId ?? "ws-auto-archive",
+    snapshot:
+      overrides?.snapshot ??
+      (overrides && "pullRequest" in overrides
+        ? createSnapshot({ pullRequest: overrides.pullRequest ?? null })
+        : harness.snapshot),
+    options: harness.options,
+    log: harness.log,
+    deps: harness.deps,
+  });
+}
+
+const cleanupPaths: string[] = [];
+
+function createGitRepo(): { tempDir: string; repoDir: string } {
+  const tempDir = mkdtempSync(path.join(tmpdir(), "archive-if-safe-"));
+  cleanupPaths.push(tempDir);
+  const repoDir = path.join(tempDir, "repo");
+  mkdirSync(repoDir, { recursive: true });
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "test@getremio.local"], {
+    cwd: repoDir,
+    stdio: "pipe",
+  });
+  execFileSync("git", ["config", "user.name", "Remio Test"], {
+    cwd: repoDir,
+    stdio: "pipe",
+  });
+  execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "initial"], {
+    cwd: repoDir,
+    stdio: "pipe",
+  });
+  return { tempDir, repoDir };
+}
+
+async function createRemioOwnedWorktree(
+  repoDir: string,
+  remioHome: string,
+  worktreeSlug: string,
+): Promise<WorktreeConfig> {
+  return createWorktree({
+    cwd: repoDir,
+    worktreeSlug,
+    source: {
+      kind: "branch-off",
+      baseBranch: "main",
+      branchName: worktreeSlug,
+    },
+
+    remioHome,
+  });
+}
+
+function createGitHubServiceStub(): ForgeService {
+  return {
+    listPullRequests: async () => [],
+    listIssues: async () => [],
+    searchIssuesAndPrs: async () => ({
+      items: [],
+      featuresEnabled: true,
+      githubFeaturesEnabled: true,
+    }),
+    getPullRequest: async ({ number }) => ({
+      number,
+      title: `PR ${number}`,
+      url: `https://github.com/acme/repo/pull/${number}`,
+      state: "OPEN",
+      body: null,
+      baseRefName: "main",
+      headRefName: `pr-${number}`,
+      labels: [],
+    }),
+    getPullRequestHeadRef: async ({ number }) => `pr-${number}`,
+    getPullRequestCheckoutTarget: async ({ number }) => ({
+      number,
+      baseRefName: "main",
+      headRefName: `pr-${number}`,
+      headOwnerLogin: null,
+      headRepositorySshUrl: null,
+      headRepositoryUrl: null,
+      isCrossRepository: false,
+    }),
+    getCurrentPullRequestStatus: async () => null,
+    createPullRequest: async () => ({
+      number: 1,
+      url: "https://github.com/acme/repo/pull/1",
+    }),
+    mergePullRequest: async () => ({ success: true }),
+    isAuthenticated: async () => true,
+    invalidate: () => {},
+  };
+}
+
+function createRealOutcomeHarness(input: {
+  remioHome: string;
+  repoDir: string;
+  worktreePath: string;
+  activeWorkspaces: ActiveWorkspaceRef[];
+  archivedWorkspaceIds: Set<string>;
+}) {
+  const active = [...input.activeWorkspaces];
+  const autoArchivedChangeRequestUrls = new Map<string, string>();
+  const logger = pino({ level: "silent" });
+  vi.spyOn(logger, "info").mockImplementation(() => undefined);
+  vi.spyOn(logger, "warn").mockImplementation(() => undefined);
+  vi.spyOn(logger, "error").mockImplementation(() => undefined);
+
+  const options: AutoArchiveArchiveOptions = {
+    remioHome: input.remioHome,
+    daemonConfigStore: {
+      get: () => ({ autoArchiveAfterMerge: true }),
+    } as unknown as AutoArchiveArchiveOptions["daemonConfigStore"],
+    workspaceGitService: {
+      getSnapshot: async () =>
+        ({
+          cwd: input.worktreePath,
+          git: {
+            isGit: true,
+            repoRoot: input.repoDir,
+            mainRepoRoot: input.repoDir,
+            currentBranch: "feature",
+            remoteUrl: "https://github.com/acme/repo.git",
+            isRemioOwnedWorktree: true,
+            isDirty: false,
+            baseRef: "main",
+            aheadBehind: { ahead: 0, behind: 0 },
+            aheadOfOrigin: 0,
+            behindOfOrigin: 0,
+            hasRemote: true,
+            diffStat: { additions: 0, deletions: 0 },
+          },
+          forge: {
+            featuresEnabled: true,
+            authState: "authenticated",
+            pullRequest: createPullRequest({ isMerged: true }),
+            error: null,
+          },
+        }) satisfies WorkspaceGitRuntimeSnapshot,
+    } as unknown as AutoArchiveArchiveOptions["workspaceGitService"],
+    github: createGitHubServiceStub(),
+    agentManager: {
+      listAgents: () => [],
+      archiveAgent: vi.fn(async () => ({ archivedAt: new Date().toISOString() })),
+      archiveSnapshot: vi.fn(async () => {
+        throw new Error("not expected without stored agents");
+      }),
+    } as unknown as AutoArchiveArchiveOptions["agentManager"],
+    agentStorage: {
+      list: async (): Promise<StoredAgentRecord[]> => [],
+    } as unknown as AutoArchiveArchiveOptions["agentStorage"],
+    terminalManager: {
+      listDirectories: () => [],
+      getTerminals: vi.fn().mockResolvedValue([]),
+    } as unknown as AutoArchiveArchiveOptions["terminalManager"],
+    findWorkspaceIdForCwd: async (cwd: string) => {
+      const match = active.find((workspace) => workspace.cwd === cwd);
+      return match?.workspaceId ?? null;
+    },
+    listActiveWorkspaces: async () =>
+      active.filter((workspace) => !input.archivedWorkspaceIds.has(workspace.workspaceId)),
+    getAutoArchivedChangeRequestUrl: async (workspaceId: string) =>
+      autoArchivedChangeRequestUrls.get(workspaceId) ?? null,
+    archiveWorkspaceRecord: async (workspaceId: string, context) => {
+      if (context?.autoArchivedChangeRequestUrl) {
+        autoArchivedChangeRequestUrls.set(workspaceId, context.autoArchivedChangeRequestUrl);
+      }
+      input.archivedWorkspaceIds.add(workspaceId);
+      const index = active.findIndex((workspace) => workspace.workspaceId === workspaceId);
+      if (index !== -1) {
+        active.splice(index, 1);
+      }
+    },
+    markWorkspaceArchiving: () => {},
+    clearWorkspaceArchiving: () => {},
+    assertWorkspaceAutomationAllowed: async () => {},
+    isCheckoutUntrusted: async () => false,
+    emitWorkspaceUpdatesForWorkspaceIds: vi.fn(),
+  };
+
+  return {
+    options,
+    log: logger,
+    unarchiveWorkspace(workspace: ActiveWorkspaceRef) {
+      input.archivedWorkspaceIds.delete(workspace.workspaceId);
+      active.push(workspace);
+    },
+  };
+}
+
+afterEach(() => {
+  for (const target of cleanupPaths.splice(0)) {
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
+describe("archiveIfSafe", () => {
+  test("denies archive when checkout facts do not establish safety", async () => {
+    for (const git of [{ headSha: undefined }, { behindOfOrigin: 1 }, { isDirty: null }]) {
+      const harness = createHarness({ snapshot: createSnapshot({ git }) });
+      await runArchiveIfSafe(harness);
+      expect(harness.deps.archiveByScope).not.toHaveBeenCalled();
+    }
+    const harness = createHarness({
+      snapshot: createSnapshot({ pullRequest: createPullRequest({ headSha: undefined }) }),
+    });
+    await runArchiveIfSafe(harness);
+    expect(harness.deps.archiveByScope).not.toHaveBeenCalled();
+  });
+
+  test("keeps the workspace active when the merged PR head differs from checkout", async () => {
+    const harness = createHarness({ snapshot: createSnapshot({ git: { headSha: "local-head" } }) });
+    await runArchiveIfSafe(harness);
+    expect(harness.deps.archiveByScope).not.toHaveBeenCalled();
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  test("does nothing when the pull request is not merged", async () => {
+    const harness = createHarness();
+
+    await runArchiveIfSafe(harness, { pullRequest: createPullRequest({ isMerged: false }) });
+
+    expect(harness.getSnapshot).not.toHaveBeenCalled();
+    expect(harness.deps.archiveByScope).not.toHaveBeenCalled();
+  });
+
+  test("does nothing when the worktree is dirty", async () => {
+    const harness = createHarness({
+      snapshot: createSnapshot({ git: { isDirty: true } }),
+    });
+
+    await runArchiveIfSafe(harness);
+
+    expect(harness.deps.isRemioOwnedWorktreeCwd).not.toHaveBeenCalled();
+    expect(harness.deps.archiveByScope).not.toHaveBeenCalled();
+  });
+
+  test("does nothing when the worktree is ahead of origin", async () => {
+    const harness = createHarness({
+      snapshot: createSnapshot({ git: { aheadOfOrigin: 1 } }),
+    });
+
+    await runArchiveIfSafe(harness);
+
+    expect(harness.deps.isRemioOwnedWorktreeCwd).not.toHaveBeenCalled();
+    expect(harness.deps.archiveByScope).not.toHaveBeenCalled();
+  });
+
+  test("archives when the PR is merged and the upstream branch was deleted", async () => {
+    const harness = createHarness({
+      snapshot: createSnapshot({ git: { aheadOfOrigin: null, behindOfOrigin: null } }),
+    });
+
+    await runArchiveIfSafe(harness);
+
+    expect(harness.deps.archiveByScope).toHaveBeenCalledTimes(1);
+  });
+
+  test("does nothing when the cwd is not a Remio-owned worktree", async () => {
+    const harness = createHarness({
+      isRemioOwnedWorktreeCwd: async () => ({ allowed: false, worktreePath: CWD }),
+    });
+
+    await runArchiveIfSafe(harness);
+
+    expect(harness.deps.isRemioOwnedWorktreeCwd).toHaveBeenCalledWith(CWD, {
+      remioHome: REMIO_HOME,
+    });
+    expect(harness.deps.archiveByScope).not.toHaveBeenCalled();
+  });
+
+  test("logs and does not throw when archiving fails", async () => {
+    const harness = createHarness({
+      archiveByScope: async () => {
+        throw new Error("archive failed");
+      },
+    });
+
+    await runArchiveIfSafe(harness);
+
+    expect(harness.log.warn).toHaveBeenCalledWith(
+      { err: expect.any(Error), cwd: CWD },
+      "Auto-archive after merge failed",
+    );
+  });
+
+  test("archives a clean Remio-owned worktree after merge", async () => {
+    const harness = createHarness();
+
+    await runArchiveIfSafe(harness);
+
+    expect(harness.deps.archiveByScope).toHaveBeenCalledTimes(1);
+    expect(harness.deps.archiveByScope).toHaveBeenCalledWith(
+      expect.objectContaining({
+        remioHome: REMIO_HOME,
+        workspaceGitService: harness.options.workspaceGitService,
+      }),
+      {
+        scope: { kind: "workspace", workspaceId: "ws-auto-archive" },
+        requestId: "auto-archive-on-merge",
+      },
+    );
+    expect(harness.log.info).toHaveBeenCalledWith(
+      {
+        workspaceId: "ws-auto-archive",
+        cwd: CWD,
+        branch: "feature",
+        pullRequestUrl: "https://github.com/acme/repo/pull/123",
+      },
+      "Auto-archived worktree after PR merge",
+    );
+  });
+
+  test("does not archive a merge event already consumed by this workspace", async () => {
+    const harness = createHarness({
+      autoArchivedChangeRequestUrl: "https://github.com/acme/repo/pull/123",
+    });
+
+    await runArchiveIfSafe(harness);
+
+    expect(harness.deps.archiveByScope).not.toHaveBeenCalled();
+  });
+
+  test("archives a different merged change request", async () => {
+    const harness = createHarness({
+      autoArchivedChangeRequestUrl: "https://github.com/acme/repo/pull/122",
+    });
+
+    await runArchiveIfSafe(harness);
+
+    expect(harness.deps.archiveByScope).toHaveBeenCalledTimes(1);
+  });
+
+  test("records the consumed change request in the workspace archive mutation", async () => {
+    const harness = createHarness({
+      archiveByScope: async (dependencies) => {
+        await dependencies.archiveWorkspaceRecord("ws-auto-archive", "2026-11-09T00:00:00.000Z");
+        return {
+          archivedAgentIds: [],
+          archivedWorkspaceIds: ["ws-auto-archive"],
+          removedDirectory: false,
+        };
+      },
+    });
+
+    await runArchiveIfSafe(harness);
+
+    expect(harness.options.archiveWorkspaceRecord).toHaveBeenCalledWith(
+      "ws-auto-archive",
+      {
+        autoArchivedChangeRequestUrl: "https://github.com/acme/repo/pull/123",
+      },
+      "2026-11-09T00:00:00.000Z",
+    );
+  });
+
+  test("archives only the supplied workspace id and does not iterate siblings", async () => {
+    const harness = createHarness();
+    harness.options.listActiveWorkspaces = vi.fn(async () => [
+      { workspaceId: "ws-merged-worktree", cwd: CWD, kind: "worktree" as const },
+      { workspaceId: "ws-sibling", cwd: CWD, kind: "local_checkout" as const },
+    ]);
+
+    await runArchiveIfSafe(harness, { workspaceId: "ws-merged-worktree" });
+
+    expect(harness.deps.archiveByScope).toHaveBeenCalledTimes(1);
+    expect(harness.deps.archiveByScope).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({
+        scope: { kind: "workspace", workspaceId: "ws-merged-worktree" },
+      }),
+    );
+  });
+
+  test("real outcome: keeps sibling workspace and directory on last reference", async () => {
+    const { tempDir, repoDir } = createGitRepo();
+    const remioHome = path.join(tempDir, ".remio");
+    const worktree = await createRemioOwnedWorktree(repoDir, remioHome, "merged-with-sibling");
+    const workspaceA = "ws-merged-with-sibling-a";
+    const workspaceB = "ws-merged-with-sibling-b";
+    const archivedWorkspaceIds = new Set<string>();
+
+    const harness = createRealOutcomeHarness({
+      remioHome,
+      repoDir,
+      worktreePath: worktree.worktreePath,
+      activeWorkspaces: [
+        { workspaceId: workspaceA, cwd: worktree.worktreePath, kind: "worktree" },
+        { workspaceId: workspaceB, cwd: worktree.worktreePath, kind: "local_checkout" },
+      ],
+      archivedWorkspaceIds,
+    });
+
+    await archiveIfSafe({
+      workspaceId: workspaceA,
+      snapshot: { ...createSnapshot(), cwd: worktree.worktreePath },
+      options: harness.options,
+      log: harness.log,
+    });
+
+    expect(archivedWorkspaceIds.has(workspaceA)).toBe(true);
+    expect(archivedWorkspaceIds.has(workspaceB)).toBe(false);
+    expect(existsSync(worktree.worktreePath)).toBe(true);
+  });
+
+  test("real outcome: removes directory when no sibling workspace remains", async () => {
+    const { tempDir, repoDir } = createGitRepo();
+    const remioHome = path.join(tempDir, ".remio");
+    const worktree = await createRemioOwnedWorktree(repoDir, remioHome, "merged-last-ref");
+    const workspaceA = "ws-merged-last-ref";
+    const archivedWorkspaceIds = new Set<string>();
+
+    const harness = createRealOutcomeHarness({
+      remioHome,
+      repoDir,
+      worktreePath: worktree.worktreePath,
+      activeWorkspaces: [{ workspaceId: workspaceA, cwd: worktree.worktreePath, kind: "worktree" }],
+      archivedWorkspaceIds,
+    });
+
+    await archiveIfSafe({
+      workspaceId: workspaceA,
+      snapshot: { ...createSnapshot(), cwd: worktree.worktreePath },
+      options: harness.options,
+      log: harness.log,
+    });
+
+    expect(archivedWorkspaceIds.has(workspaceA)).toBe(true);
+    expect(existsSync(worktree.worktreePath)).toBe(false);
+  });
+
+  test("real outcome: an unarchived workspace is not archived again for the same merged PR", async () => {
+    const { tempDir, repoDir } = createGitRepo();
+    const remioHome = path.join(tempDir, ".remio");
+    const worktree = await createRemioOwnedWorktree(repoDir, remioHome, "merged-then-unarchived");
+    const workspace = {
+      workspaceId: "ws-merged-then-unarchived",
+      cwd: worktree.worktreePath,
+      kind: "worktree" as const,
+    };
+    const sibling = {
+      workspaceId: "ws-directory-preserving-sibling",
+      cwd: worktree.worktreePath,
+      kind: "local_checkout" as const,
+    };
+    const archivedWorkspaceIds = new Set<string>();
+    const harness = createRealOutcomeHarness({
+      remioHome,
+      repoDir,
+      worktreePath: worktree.worktreePath,
+      activeWorkspaces: [workspace, sibling],
+      archivedWorkspaceIds,
+    });
+    const mergedSnapshot = { ...createSnapshot(), cwd: worktree.worktreePath };
+
+    await archiveIfSafe({
+      workspaceId: workspace.workspaceId,
+      snapshot: mergedSnapshot,
+      options: harness.options,
+      log: harness.log,
+    });
+    expect(archivedWorkspaceIds.has(workspace.workspaceId)).toBe(true);
+
+    harness.unarchiveWorkspace(workspace);
+    await archiveIfSafe({
+      workspaceId: workspace.workspaceId,
+      snapshot: mergedSnapshot,
+      options: harness.options,
+      log: harness.log,
+    });
+
+    expect(archivedWorkspaceIds.has(workspace.workspaceId)).toBe(false);
+    expect(existsSync(worktree.worktreePath)).toBe(true);
+  });
+
+  test("real outcome: skips teardown commands for an unapproved cross-repository checkout", async () => {
+    const { tempDir, repoDir } = createGitRepo();
+    const markerName = "auto-archive-merge-teardown.log";
+    const marker = path.join(repoDir, markerName);
+    const fs = await import("node:fs");
+    fs.writeFileSync(
+      path.join(repoDir, "remio.json"),
+      JSON.stringify({
+        worktree: {
+          teardown: [
+            `node -e "require('fs').writeFileSync(process.env.REMIO_SOURCE_CHECKOUT_PATH + '/${markerName}', 'ran')"`,
+          ],
+        },
+      }),
+    );
+    execFileSync("git", ["add", "."], { cwd: repoDir, stdio: "pipe" });
+    execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-m", "teardown"], {
+      cwd: repoDir,
+      stdio: "pipe",
+    });
+    const remioHome = path.join(tempDir, ".remio");
+    const worktree = await createRemioOwnedWorktree(repoDir, remioHome, "merged-untrusted");
+    const workspaceId = "ws-merged-untrusted";
+    const archivedWorkspaceIds = new Set<string>();
+    const harness = createRealOutcomeHarness({
+      remioHome,
+      repoDir,
+      worktreePath: worktree.worktreePath,
+      activeWorkspaces: [
+        {
+          workspaceId,
+          cwd: worktree.worktreePath,
+          kind: "worktree",
+          worktreeRoot: worktree.worktreePath,
+          isRemioOwnedWorktree: true,
+          mainRepoRoot: repoDir,
+        },
+      ],
+      archivedWorkspaceIds,
+    });
+    const { WorkspaceAutomationBlockedError } = await import("../workspace-automation-gate.js");
+    const assertWorkspaceAutomationAllowed = vi.fn(async () => {
+      throw new WorkspaceAutomationBlockedError({
+        kind: "change_request",
+        forge: "github",
+        number: 123,
+        headRepository: "contributor/repo",
+      });
+    });
+    harness.options.assertWorkspaceAutomationAllowed = assertWorkspaceAutomationAllowed;
+
+    await archiveIfSafe({
+      workspaceId,
+      snapshot: { ...createSnapshot(), cwd: worktree.worktreePath },
+      options: harness.options,
+      log: harness.log,
+    });
+
+    expect(assertWorkspaceAutomationAllowed).toHaveBeenCalledWith(workspaceId);
+    expect(archivedWorkspaceIds.has(workspaceId)).toBe(true);
+    expect(existsSync(worktree.worktreePath)).toBe(false);
+    expect(existsSync(marker)).toBe(false);
+  });
+});

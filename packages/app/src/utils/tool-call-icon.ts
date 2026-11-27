@@ -1,0 +1,43 @@
+import type { ComponentType } from "react";
+import {
+  Bot,
+  Brain,
+  Eye,
+  MicVocal,
+  Pencil,
+  Search,
+  Sparkles,
+  SquareTerminal,
+  Wrench,
+} from "lucide-react-native";
+import type { AgentMessage } from "@getremio/protocol/agent-message";
+import type { ToolCallDetail } from "@getremio/protocol/agent-types";
+import { RemioLogo } from "@/components/icons/remio-logo";
+import { resolveToolCallIconName, type ToolCallIcon } from "./tool-call-icon-name";
+
+export type ToolCallIconComponent = ComponentType<{ size?: number; color?: string }>;
+
+const ICON_COMPONENTS: Record<ToolCallIcon, ToolCallIconComponent> = {
+  wrench: Wrench,
+  square_terminal: SquareTerminal,
+  eye: Eye,
+  pencil: Pencil,
+  search: Search,
+  bot: Bot,
+  sparkles: Sparkles,
+  brain: Brain,
+  mic_vocal: MicVocal,
+  remio: RemioLogo,
+};
+
+export function componentForToolCallIcon(name: ToolCallIcon): ToolCallIconComponent {
+  return ICON_COMPONENTS[name];
+}
+
+export function resolveToolCallIcon(
+  toolName: string,
+  detail?: ToolCallDetail,
+  agentMessage?: AgentMessage,
+): ToolCallIconComponent {
+  return componentForToolCallIcon(resolveToolCallIconName(toolName, detail, agentMessage));
+}

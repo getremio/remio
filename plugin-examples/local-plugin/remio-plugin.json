@@ -1,0 +1,6 @@
+{
+  "id": "local-example",
+  "requirements": {
+    "remio": ">=0.0.1"
+  }
+}

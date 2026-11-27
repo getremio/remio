@@ -1,0 +1,20 @@
+name = "remio-relay"
+account_id = "270ef2747578e2cf809aa69980fe9055"
+main = "src/cloudflare-adapter.ts"
+compatibility_date = "2024-12-01"
+
+routes = [{ pattern = "relay.remio.hoshizukimio.moe", custom_domain = true }]
+
+[observability]
+enabled = true
+
+[vars]
+# REMIO_RELAY_UPSTREAM = "https://relay-next.remio.hoshizukimio.moe"
+
+[[durable_objects.bindings]]
+name = "RELAY"
+class_name = "RelayDurableObject"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RelayDurableObject"]

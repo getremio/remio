@@ -1,0 +1,96 @@
+import type { JsonValue } from "@getremio/protocol/agent-types";
+import type { UserComposerAttachment } from "@/attachments/types";
+import type { DraftAgentControlsProps } from "@/composer/agent-controls";
+import type { UseAgentFormStateResult } from "@/hooks/use-agent-form-state";
+
+export interface DraftKeyContext {
+  selectedServerId: string | null;
+}
+
+export type DraftKeyInput = string | ((context: DraftKeyContext) => string);
+
+export function resolveDraftKey(input: {
+  draftKey: DraftKeyInput;
+  selectedServerId: string | null;
+}): string {
+  if (typeof input.draftKey === "function") {
+    return input.draftKey({ selectedServerId: input.selectedServerId });
+  }
+  return input.draftKey;
+}
+
+export function buildDraftAgentControls(input: {
+  formState: UseAgentFormStateResult;
+  effectiveModelId: string;
+  optionControls?: DraftAgentControlsProps["optionControls"];
+  options: DraftAgentControlsProps["options"];
+  onSetOption: DraftAgentControlsProps["onSetOption"];
+  onApplyAgentProfile: DraftAgentControlsProps["onApplyAgentProfile"];
+  onDropdownClose?: DraftAgentControlsProps["onDropdownClose"];
+  context: NonNullable<DraftAgentControlsProps["context"]>;
+  metadata: Record<string, JsonValue>;
+  onSetMetadata: (patch: Record<string, JsonValue>) => void;
+}): DraftAgentControlsProps {
+  const {
+    formState,
+    optionControls,
+    options,
+    onSetOption,
+    onApplyAgentProfile,
+    onDropdownClose,
+    context,
+    metadata,
+    onSetMetadata,
+  } = input;
+  return {
+    providerDefinitions: formState.providerDefinitions,
+    selectedProvider: formState.selectedProvider,
+    modeOptions: formState.modeOptions,
+    selectedMode: formState.selectedMode,
+    onSelectMode: formState.setModeFromUser,
+    models: formState.availableModels,
+    selectedModel: formState.selectedModel,
+    effectiveModelId: input.effectiveModelId,
+    onSelectModel: formState.setModelFromUser,
+    isModelLoading: formState.isModelLoading,
+    modelSelectorProviders: formState.modelSelectorProviders,
+    isAllModelsLoading: formState.isAllModelsLoading,
+    onSelectProviderAndModel: formState.setProviderAndModelFromUser,
+    thinkingOptions: formState.availableThinkingOptions,
+    selectedThinkingOptionId: formState.selectedThinkingOptionId,
+    onSelectThinkingOption: formState.setThinkingOptionFromUser,
+    onApplyAgentProfile,
+    optionControls,
+    options,
+    onSetOption,
+    onDropdownClose,
+    onModelSelectorOpen: formState.refetchProviderModelsIfStale,
+    onRetryModelProvider: formState.refreshProviderModels,
+    isRetryingModelProvider: formState.isProviderModelsRefreshing,
+    modelSelectorServerId: formState.selectedServerId,
+    context,
+    metadata,
+    onSetMetadata,
+  };
+}
+
+export function hasDraftContent(input: {
+  text: string;
+  attachments: UserComposerAttachment[];
+}): boolean {
+  return input.text.length > 0 || input.attachments.length > 0;
+}
+
+export function areAttachmentsEqual(input: {
+  left: UserComposerAttachment[];
+  right: UserComposerAttachment[];
+}): boolean {
+  if (input.left.length !== input.right.length) {
+    return false;
+  }
+
+  return input.left.every((attachment, index) => {
+    const other = input.right[index];
+    return JSON.stringify(attachment) === JSON.stringify(other);
+  });
+}

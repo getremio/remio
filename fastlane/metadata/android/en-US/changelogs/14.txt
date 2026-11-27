@@ -1,0 +1,4 @@
+Added
+- Initial Remio fork release (0.0.1).
+
+Full notes: https://remio.hoshizukimio.moe/changelog

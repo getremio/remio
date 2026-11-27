@@ -1,0 +1,17 @@
+name = "remio-website"
+account_id = "270ef2747578e2cf809aa69980fe9055"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+main = "./src/server-entry.ts"
+
+routes = [
+  { pattern = "remio.hoshizukimio.moe", custom_domain = true },
+  { pattern = "plugins.remio.hoshizukimio.moe", custom_domain = true },
+]
+
+[observability]
+enabled = true
+
+[[kv_namespaces]]
+binding = "WEBSITE_CACHE"
+id = "075ea3bb12694b5a9207df285597278b"

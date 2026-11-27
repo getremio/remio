@@ -1,0 +1,91 @@
+// Daemon configuration inputs. General provider credentials and executable/runtime
+// controls remain available to managed launches and their agent processes.
+export const DAEMON_SETTING_ENV_KEYS = [
+  "MCP_DEBUG",
+  "OPENAI_STT_BASE_URL",
+  "OPENAI_TTS_BASE_URL",
+  "REMIO_ALLOWED_HOSTS",
+  "REMIO_APP_BASE_URL",
+  "REMIO_CORS_ORIGINS",
+  "REMIO_DICTATION_ENABLED",
+  "REMIO_DICTATION_LANGUAGE",
+  "REMIO_DICTATION_LOCAL_STT_MODEL",
+  "REMIO_DICTATION_STT_PROVIDER",
+  "REMIO_GIT_CONCURRENCY",
+  "REMIO_GIT_MAX_PROCESSES_PER_SECOND",
+  "REMIO_GIT_MAX_PROCESS_CONCURRENCY",
+  "REMIO_HOSTNAMES",
+  "REMIO_LISTEN",
+  "REMIO_LOCAL_MODELS_DIR",
+  "REMIO_LOG",
+  "REMIO_LOG_CONSOLE_FORMAT",
+  "REMIO_LOG_CONSOLE_LEVEL",
+  "REMIO_LOG_FILE_LEVEL",
+  "REMIO_LOG_FILE_PATH",
+  "REMIO_LOG_FILE_ROTATE_COUNT",
+  "REMIO_LOG_FILE_ROTATE_SIZE",
+  "REMIO_LOG_FORMAT",
+  "REMIO_LOG_LEVEL",
+  "REMIO_LOG_ROTATE_COUNT",
+  "REMIO_LOG_ROTATE_SIZE",
+  "REMIO_PASSWORD",
+  "REMIO_PLUGIN_REGISTRY",
+  "REMIO_RELAY_ENABLED",
+  "REMIO_RELAY_ENDPOINT",
+  "REMIO_RELAY_PUBLIC_ENDPOINT",
+  "REMIO_RELAY_PUBLIC_USE_TLS",
+  "REMIO_RELAY_USE_TLS",
+  "REMIO_SERVICE_PROXY_ENABLED",
+  "REMIO_SERVICE_PROXY_LISTEN",
+  "REMIO_SERVICE_PROXY_PUBLIC_BASE_URL",
+  "REMIO_TRUSTED_PROXIES",
+  "REMIO_VOICE_LANGUAGE",
+  "REMIO_VOICE_LLM_PROVIDER",
+  "REMIO_VOICE_LOCAL_STT_MODEL",
+  "REMIO_VOICE_LOCAL_TTS_MODEL",
+  "REMIO_VOICE_LOCAL_TTS_SPEAKER_ID",
+  "REMIO_VOICE_LOCAL_TTS_SPEED",
+  "REMIO_VOICE_MODE_ENABLED",
+  "REMIO_VOICE_STT_PROVIDER",
+  "REMIO_VOICE_TTS_PROVIDER",
+  "REMIO_VOICE_TURN_DETECTION_PROVIDER",
+  "REMIO_WEB_UI_DIST_DIR",
+  "REMIO_WEB_UI_ENABLED",
+  "PORT",
+  "STT_CONFIDENCE_THRESHOLD",
+  "STT_MODEL",
+  "TTS_MODEL",
+  "TTS_VOICE",
+] as const;
+
+const CONFIG_CONTEXT_ENV_KEYS = [
+  "REMIO_NODE_ENV",
+  "REMIO_DESKTOP_MANAGED",
+  "OPENAI_API_KEY",
+  "OPENAI_BASE_URL",
+  "OPENAI_STT_API_KEY",
+  "OPENAI_TTS_API_KEY",
+] as const;
+
+export function configurationEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    [...DAEMON_SETTING_ENV_KEYS, ...CONFIG_CONTEXT_ENV_KEYS].map((key) => [key, env[key]]),
+  );
+}
+
+export function daemonLaunchEnvironment(input: {
+  env: NodeJS.ProcessEnv;
+  home: string;
+  mode: "managed" | "deployment";
+  desktopManaged?: boolean;
+}): NodeJS.ProcessEnv {
+  const env = { ...input.env };
+  if (input.mode === "managed") {
+    for (const key of DAEMON_SETTING_ENV_KEYS) delete env[key];
+  }
+  delete env.REMIO_HOST;
+  delete env.REMIO_DESKTOP_MANAGED;
+  env.REMIO_HOME = input.home;
+  if (input.desktopManaged) env.REMIO_DESKTOP_MANAGED = "1";
+  return env;
+}

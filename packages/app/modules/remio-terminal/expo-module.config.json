@@ -1,0 +1,9 @@
+{
+  "platforms": ["android", "ios"],
+  "android": {
+    "modules": ["moe.hoshizukimio.remio.terminal.RemioTerminalModule"]
+  },
+  "ios": {
+    "modules": ["RemioTerminalModule"]
+  }
+}

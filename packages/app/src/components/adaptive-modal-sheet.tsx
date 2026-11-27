@@ -1,0 +1,898 @@
+import { useOverlayRegistration, type KeyboardInputEvent } from "@/keyboard";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { ComponentProps, ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
+import { Keyboard, Text, View } from "react-native";
+import type { DimensionValue, StyleProp, ViewProps, ViewStyle } from "react-native";
+import { StyleSheet, useUnistyles, withUnistyles } from "react-native-unistyles";
+import { useIsCompactFormFactor } from "@/constants/layout";
+import { getOverlayRoot, OverlayLayerProvider, useGlobalOverlayLayer } from "../lib/overlay-root";
+import {
+  BottomSheetHandle,
+  useBottomSheetGestureHandlers,
+  type BottomSheetBackgroundProps,
+} from "@gorhom/bottom-sheet";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import Animated from "react-native-reanimated";
+import { ArrowLeft, Search, X, type LucideIcon } from "lucide-react-native";
+import {
+  IsolatedBottomSheetModal,
+  SheetVisibleFrame,
+  type ContextBridge,
+  useBottomSheetSafeAreaPaddingStyle,
+  useIsolatedBottomSheetVisibility,
+} from "@/components/ui/isolated-bottom-sheet-modal";
+import { ScrollView } from "@/components/ui/scroll-view";
+import { isWeb } from "@/constants/platform";
+import { SafeAreaInsetsContext, useSafeAreaInsets } from "react-native-safe-area-context";
+import { AdaptiveTextInput } from "@/components/adaptive-text-input";
+import { useDismissibleOverlay } from "@/components/ui/overlay-dismissal";
+import { DismissBackdrop } from "@/components/ui/dismiss-backdrop";
+import {
+  IconButtonChromeProvider,
+  iconButtonChromeGlyphSize,
+  iconButtonChromeHang,
+  mutedIconColorMapping,
+} from "@/components/ui/icon-button-chrome";
+import { LoadingSpinner } from "@/components/ui/loading-spinner";
+import { ToolbarButton } from "@/components/ui/pane-content-toolbar";
+export { AdaptiveTextInput, type AdaptiveTextInputProps } from "@/components/adaptive-text-input";
+
+// Horizontal indent token shared by the sheet header (title, back arrow,
+// leading icon, search input icon) and any row primitive rendered inside the
+// sheet body. Rows whose leading icon should line up with the header must
+// match this padding.
+export const SHEET_HORIZONTAL_PADDING_SCALE = 6;
+
+/** The one height a sheet takes when it shows a whole pane rather than sizing to its content. */
+export const FULL_SHEET_SNAP_POINTS = ["92%"];
+
+export interface SheetHeaderSearch {
+  onChange: (value: string) => void;
+  onFocus?: () => void;
+  onBlur?: () => void;
+  resetKey?: string | number;
+  placeholder?: string;
+  autoFocus?: boolean;
+  testID?: string;
+}
+
+export interface SheetHeaderBack {
+  onPress: () => void;
+  label?: string;
+  accessibilityLabel?: string;
+}
+
+export interface SheetHeader {
+  title: string;
+  titleTestID?: string;
+  subtitle?: ReactNode;
+  back?: SheetHeaderBack;
+  leading?: ReactNode;
+  actions?: ReactNode;
+  search?: SheetHeaderSearch;
+}
+
+const SCROLL_CONTENT_GROW = { flexGrow: 1 };
+// Header buttons hang by how far their frame reaches past the glyph, so the edge glyphs sit on the
+// content rail and a 44pt touch frame does not grow the row.
+const HEADER_BUTTON_HANG = iconButtonChromeHang("large");
+const NATIVE_DIALOG_SNAP_POINTS = ["100%"];
+
+const styles = StyleSheet.create((theme) => ({
+  nativeDialogSurface: {
+    flex: 1,
+  },
+  nativeDialogBackground: {
+    backgroundColor: "transparent",
+  },
+  desktopOverlay: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: theme.spacing[6],
+    pointerEvents: "auto" as const,
+  },
+  desktopCard: {
+    overflow: "hidden",
+    width: "100%",
+    maxWidth: 520,
+    maxHeight: "85%",
+    flexShrink: 1,
+    minHeight: 0,
+    backgroundColor: theme.colors.surface0,
+    borderRadius: theme.borderRadius.xl,
+    borderWidth: 1,
+    borderColor: theme.colors.surface2,
+  },
+  headerContainer: {
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.surface2,
+  },
+  // One height for every sheet header whatever its buttons; a hung 44pt touch frame fits inside it.
+  headerRow: {
+    minHeight: 64,
+    paddingHorizontal: theme.spacing[SHEET_HORIZONTAL_PADDING_SCALE],
+    paddingVertical: theme.spacing[4],
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
+  },
+  headerBack: {
+    marginVertical: HEADER_BUTTON_HANG,
+    marginLeft: HEADER_BUTTON_HANG,
+  },
+  headerLeadingSlot: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  // The title takes the room the buttons leave and truncates; the buttons never shrink.
+  headerTitleGroup: {
+    flex: 1,
+    gap: theme.spacing[1],
+    minWidth: 0,
+  },
+  title: {
+    fontSize: theme.fontSize.base,
+    fontWeight: theme.fontWeight.medium,
+  },
+  subtitle: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+  },
+  headerTrailing: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
+    flexShrink: 0,
+    marginVertical: HEADER_BUTTON_HANG,
+    marginRight: HEADER_BUTTON_HANG,
+  },
+  // Without a header the close button floats over the card's top-right corner.
+  floatingClose: {
+    position: "absolute",
+    top: theme.spacing[4],
+    right: theme.spacing[4],
+  },
+  searchRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
+    paddingHorizontal: theme.spacing[SHEET_HORIZONTAL_PADDING_SCALE],
+    paddingBottom: theme.spacing[3],
+  },
+  // Inline variants for InlineHeaderView inside the desktop Combobox popover.
+  // Horizontal padding matches the model picker's row indent: the picker uses
+  // children mode (desktopChildrenScrollContent, no scroll padding), so the
+  // row content starts at item.paddingHorizontal = spacing[3].
+  // The search row below owns the gap under the title: the input already
+  // carries its own vertical padding, so a paddingBottom here would stack on
+  // top of two more and push the title far off the field.
+  inlineHeaderRow: {
+    paddingHorizontal: theme.spacing[3],
+    paddingTop: theme.spacing[2],
+    paddingBottom: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
+  },
+  inlineSearchRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
+    paddingHorizontal: theme.spacing[3],
+    paddingVertical: theme.spacing[2],
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
+  },
+  inlineTitle: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: theme.fontSize.base,
+    fontWeight: theme.fontWeight.medium,
+    color: theme.colors.foreground,
+  },
+  searchInput: {
+    flex: 1,
+    paddingVertical: theme.spacing[2],
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.base,
+  },
+  desktopScrollContainer: {
+    // Grows only when the card has an explicit `desktopHeight`; a content-sized
+    // card has nothing to grow into. Without it a fixed-height card with short
+    // content leaves the footer stranded in the middle.
+    flexGrow: 1,
+    flexShrink: 1,
+    minHeight: 0,
+    position: "relative",
+  },
+  desktopScroll: {
+    flexShrink: 1,
+    minHeight: 0,
+  },
+  // The sheet's content inset — one definition for every presentation, always
+  // applied through <SheetContent />.
+  sheetContent: {
+    padding: theme.spacing[SHEET_HORIZONTAL_PADDING_SCALE],
+    gap: theme.spacing[4],
+  },
+  contentGrow: {
+    flexGrow: 1,
+  },
+  compactStaticContent: {
+    flex: 1,
+    minHeight: 0,
+  },
+  bottomSheetVisibleScroll: {
+    flex: 1,
+    minHeight: 0,
+  },
+  desktopStaticContent: {
+    flexShrink: 1,
+    minHeight: 0,
+  },
+  footer: {
+    paddingHorizontal: theme.spacing[SHEET_HORIZONTAL_PADDING_SCALE],
+    paddingVertical: theme.spacing[3],
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.surface2,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: theme.spacing[2],
+  },
+}));
+
+const WEB_EXIT_DURATION_MS = 160;
+const WEB_ENTER_DURATION_MS = 160;
+const WEB_ENTER_ANIMATION_NAME = "remio-modal-enter";
+
+// The desktop card fades in; the dim lands at once, so the screen behind is never seen undimmed
+// while the dialog arrives. A CSS animation runs from the card's first paint, so a dialog that opens
+// on its own, like first-run setup, never pops in. Closing fades the whole overlay. With reduced
+// motion the keyframes are never defined, so the card appears at once.
+function ensureWebEnterKeyframes() {
+  if (!isWeb || typeof document === "undefined") return;
+  if (document.getElementById(WEB_ENTER_ANIMATION_NAME)) return;
+  const style = document.createElement("style");
+  style.id = WEB_ENTER_ANIMATION_NAME;
+  style.textContent = `@media (prefers-reduced-motion: no-preference) { @keyframes ${WEB_ENTER_ANIMATION_NAME} { from { opacity: 0; } to { opacity: 1; } } }`;
+  document.head.appendChild(style);
+}
+ensureWebEnterKeyframes();
+// The CSS animation props are not part of ViewStyle without the generated expo-env.d.ts.
+const WEB_ENTER_STYLE = {
+  animationName: WEB_ENTER_ANIMATION_NAME,
+  animationDuration: `${WEB_ENTER_DURATION_MS}ms`,
+  animationTimingFunction: "ease-out",
+} as unknown as ViewStyle;
+
+/** The compact sheet's surface: Gorhom's `backgroundComponent` for every bottom sheet. */
+export function SheetBackground({ style }: BottomSheetBackgroundProps) {
+  const { theme } = useUnistyles();
+  const combinedStyle = useMemo(
+    () => [
+      style,
+      {
+        backgroundColor: theme.colors.surface0,
+        borderTopLeftRadius: theme.borderRadius["2xl"],
+        borderTopRightRadius: theme.borderRadius["2xl"],
+      },
+    ],
+    [style, theme.colors.surface0, theme.borderRadius],
+  );
+  return <Animated.View pointerEvents="none" style={combinedStyle} />;
+}
+
+const ThemedBottomSheetHandle = withUnistyles(BottomSheetHandle, (theme) => ({
+  indicatorStyle: { backgroundColor: theme.colors.palette.zinc[600] },
+}));
+
+/** The compact sheet's drag handle: Gorhom's `handleComponent` for every bottom sheet. */
+export function SheetHandle({
+  // Gorhom passes `indicatorStyle={undefined}`, which would override the themed indicator.
+  indicatorStyle: _indicatorStyle,
+  ...props
+}: ComponentProps<typeof BottomSheetHandle>) {
+  return <ThemedBottomSheetHandle {...props} />;
+}
+
+/**
+ * Content that drags the sheet the way its handle does. A sheet whose body scrolls on its own
+ * turns content panning off and wraps its header in this, so the header still pulls it down.
+ * Render it inside the sheet's content.
+ */
+export function SheetDragArea({ children }: { children: ReactNode }) {
+  const { handlePanGestureHandler } = useBottomSheetGestureHandlers();
+  const gesture = useMemo(
+    () =>
+      Gesture.Pan()
+        .shouldCancelWhenOutside(false)
+        .runOnJS(false)
+        .onStart(handlePanGestureHandler.handleOnStart)
+        .onChange(handlePanGestureHandler.handleOnChange)
+        .onEnd(handlePanGestureHandler.handleOnEnd)
+        .onFinalize(handlePanGestureHandler.handleOnFinalize),
+    [handlePanGestureHandler],
+  );
+  return (
+    <GestureDetector gesture={gesture}>
+      <View>{children}</View>
+    </GestureDetector>
+  );
+}
+
+/**
+ * A compact sheet's content area that reaches the bottom of the screen. It owns the system
+ * navigation inset: it pads it once and tells its content none is left, so content that pads the
+ * inset itself, like the composer dock, sits the same in a sheet as in a tab.
+ */
+export function SheetBottomInset({ style, children, ...props }: ViewProps) {
+  const insets = useSafeAreaInsets();
+  const contentInsets = useMemo(() => ({ ...insets, bottom: 0 }), [insets]);
+  const insetStyle = useMemo(() => [style, { paddingBottom: insets.bottom }], [style, insets]);
+  return (
+    <View {...props} style={insetStyle}>
+      <SafeAreaInsetsContext.Provider value={contentInsets}>
+        {children}
+      </SafeAreaInsetsContext.Provider>
+    </View>
+  );
+}
+
+/**
+ * The sheet body, indented to the sheet's content inset.
+ *
+ * The inset lives on a real `View` and never on a scroller's
+ * `contentContainerStyle`: that is a library prop, not the `style` prop
+ * Unistyles registers, so a themed inset handed to a third-party scroller such
+ * as `BottomSheetScrollView` silently resolves to nothing on web — which is how
+ * the compact sheet ended up rendering its cards flush to the screen edges. See
+ * docs/unistyles.md "Main Gotcha: contentContainerStyle".
+ */
+function SheetContent({ style, children }: { style: StyleProp<ViewStyle>; children: ReactNode }) {
+  return <View style={[styles.sheetContent, style]}>{children}</View>;
+}
+
+const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
+const ThemedHeaderGlyph = withUnistyles(function HeaderGlyph({
+  icon: Icon,
+  size,
+  color,
+}: {
+  icon: LucideIcon;
+  size: number;
+  color?: string;
+}) {
+  return <Icon size={size} color={color} />;
+});
+
+/**
+ * The one icon button of a sheet header: the back arrow, the close X, and every action passed
+ * through `SheetHeader.actions`. Inside a header it takes the header island's chrome, so all of them
+ * share one frame, glyph, colour and hover. `busy` swaps the glyph for a spinner and holds presses.
+ */
+export function SheetHeaderIconButton({
+  icon,
+  label,
+  onPress,
+  busy = false,
+  disabled = false,
+  testID,
+}: {
+  icon: LucideIcon;
+  /** The accessible name, also shown as the desktop tooltip. */
+  label: string;
+  onPress: () => void;
+  busy?: boolean;
+  disabled?: boolean;
+  testID?: string;
+}) {
+  const compact = useIsCompactFormFactor();
+  const glyphSize = iconButtonChromeGlyphSize("large", compact);
+  return (
+    <ToolbarButton
+      label={label}
+      compact={compact}
+      disabled={disabled || busy}
+      onPress={onPress}
+      testID={testID}
+    >
+      {busy ? (
+        <ThemedLoadingSpinner size={glyphSize} uniProps={mutedIconColorMapping} />
+      ) : (
+        <ThemedHeaderGlyph icon={icon} size={glyphSize} uniProps={mutedIconColorMapping} />
+      )}
+    </ToolbarButton>
+  );
+}
+
+function SheetHeaderBackButton({ back }: { back: SheetHeaderBack }) {
+  const { t } = useTranslation();
+  return (
+    <View style={styles.headerBack}>
+      <SheetHeaderIconButton
+        icon={ArrowLeft}
+        label={back.accessibilityLabel ?? back.label ?? t("common.actions.back")}
+        onPress={back.onPress}
+        testID="sheet-header-back"
+      />
+    </View>
+  );
+}
+
+/** A plain-text header subtitle: one muted line under the title that truncates, never the title. */
+export function SheetHeaderSubtitle({ text, testID }: { text: string; testID?: string }) {
+  return (
+    <Text style={styles.subtitle} numberOfLines={1} testID={testID}>
+      {text}
+    </Text>
+  );
+}
+
+export function SheetHeaderView({
+  header,
+  onClose,
+  showCloseButton = true,
+  testID,
+  closeTestID,
+}: {
+  header: SheetHeader;
+  onClose: () => void;
+  showCloseButton?: boolean;
+  testID?: string;
+  closeTestID?: string;
+}) {
+  const { theme } = useUnistyles();
+  const { t } = useTranslation();
+  const titleStyle = useMemo(
+    () => [styles.title, { color: theme.colors.foreground }],
+    [theme.colors.foreground],
+  );
+  const search = header.search;
+  const handleSearchChange = useCallback(
+    (value: string) => {
+      search?.onChange(value);
+    },
+    [search],
+  );
+
+  return (
+    <View style={styles.headerContainer} testID={testID}>
+      <IconButtonChromeProvider value="header-island">
+        <View style={styles.headerRow}>
+          {header.back ? <SheetHeaderBackButton back={header.back} /> : null}
+          {header.leading ? <View style={styles.headerLeadingSlot}>{header.leading}</View> : null}
+          <View style={styles.headerTitleGroup}>
+            <Text style={titleStyle} numberOfLines={1} testID={header.titleTestID}>
+              {header.title}
+            </Text>
+            {header.subtitle}
+          </View>
+          <View style={styles.headerTrailing}>
+            {header.actions}
+            {showCloseButton ? (
+              <SheetHeaderIconButton
+                icon={X}
+                label={t("common.actions.close")}
+                onPress={onClose}
+                testID={closeTestID}
+              />
+            ) : null}
+          </View>
+        </View>
+      </IconButtonChromeProvider>
+      {search ? (
+        <View style={styles.searchRow}>
+          <Search size={theme.iconSize.md} color={theme.colors.foregroundMuted} />
+          <AdaptiveTextInput
+            // @ts-expect-error - outlineStyle is web-only
+            style={[styles.searchInput, isWeb && { outlineStyle: "none" }]}
+            placeholder={search.placeholder ?? t("common.actions.search")}
+            resetKey={search.resetKey}
+            onChangeText={handleSearchChange}
+            onFocus={search.onFocus}
+            onBlur={search.onBlur}
+            autoCapitalize="none"
+            autoCorrect={false}
+            autoFocus={search.autoFocus}
+            testID={search.testID}
+          />
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+export function InlineHeaderView({ header }: { header: SheetHeader }) {
+  const { theme } = useUnistyles();
+  const { t } = useTranslation();
+  const hasInlineRow = Boolean(header.back || header.leading || header.actions);
+  if (!hasInlineRow && !header.search) return null;
+  return (
+    <View>
+      {hasInlineRow ? (
+        <IconButtonChromeProvider value="header-island">
+          <View style={styles.inlineHeaderRow}>
+            {header.back ? <SheetHeaderBackButton back={header.back} /> : null}
+            {header.leading ? <View style={styles.headerLeadingSlot}>{header.leading}</View> : null}
+            <Text style={styles.inlineTitle} numberOfLines={1} testID={header.titleTestID}>
+              {header.title}
+            </Text>
+            {header.actions ? <View style={styles.headerTrailing}>{header.actions}</View> : null}
+          </View>
+        </IconButtonChromeProvider>
+      ) : null}
+      {header.search ? (
+        <View style={styles.inlineSearchRow}>
+          <Search size={theme.iconSize.sm} color={theme.colors.foregroundMuted} />
+          <AdaptiveTextInput
+            // @ts-expect-error - outlineStyle is web-only
+            style={[styles.searchInput, isWeb && { outlineStyle: "none" }]}
+            placeholder={header.search.placeholder ?? t("common.actions.search")}
+            resetKey={header.search.resetKey}
+            onChangeText={header.search.onChange}
+            onFocus={header.search.onFocus}
+            onBlur={header.search.onBlur}
+            autoCapitalize="none"
+            autoCorrect={false}
+            autoFocus={header.search.autoFocus}
+            testID={header.search.testID}
+          />
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * The sheet's action row: a top border, the sheet's side inset, and children spread across it.
+ * The sheet draws it for `footer`; a body that splits into panes renders it at the bottom of one.
+ */
+export function SheetFooter({
+  style,
+  children,
+}: {
+  style?: StyleProp<ViewStyle>;
+  children: ReactNode;
+}) {
+  return <View style={[styles.footer, style]}>{children}</View>;
+}
+
+export interface AdaptiveModalSheetProps {
+  /**
+   * The title row with the close button. Leave it out when the body draws its own chrome, such as
+   * a full-height side rail: the desktop card then floats the close button over its top-right
+   * corner, and the compact sheet closes from its handle.
+   */
+  header?: SheetHeader;
+  /**
+   * Leave out the header's close button when `header.back` is the only way out, as for a sheet
+   * that stands in for a page of the surface beneath it. Escape still closes the sheet.
+   */
+  showCloseButton?: boolean;
+  visible: boolean;
+  onClose: () => void;
+  onDismiss?: () => void;
+  children: ReactNode;
+  /** Sticky footer rendered below the scrollable content. */
+  footer?: ReactNode;
+  footerContainerStyle?: StyleProp<ViewStyle>;
+  snapPoints?: string[];
+  testID?: string;
+  /** Override the max width of the desktop card. */
+  desktopMaxWidth?: number;
+  /** Bound an author-owned list without changing content-sized first-party dialogs. */
+  desktopHeight?: DimensionValue;
+  /** Whether the host supplies the scroll container. Caller-owned lists still share sheet gestures. */
+  scrollable?: boolean;
+  presentation?: "push" | "replace";
+  /** Full body viewport below the header, including space beyond the content. */
+  bodyStyle?: StyleProp<ViewStyle>;
+  /** Layout intent for the sheet body, composed over the sheet's own content inset. */
+  contentStyle?: StyleProp<ViewStyle>;
+  /** Re-establishes caller-owned contexts inside the native or compact sheet portal. */
+  contextBridge?: ContextBridge | null;
+  /**
+   * Keys the body handles while the sheet is the top overlay, such as list navigation. Escape
+   * always closes the sheet. Return true from `onKeyDown` to claim the key.
+   */
+  keyboard?: SheetKeyboard;
+}
+
+export interface SheetKeyboard {
+  keys: readonly string[];
+  onKeyDown: (event: KeyboardInputEvent) => boolean;
+}
+
+/**
+ * The compact sheet's body. It renders on the far side of the sheet's portal so `SheetVisibleFrame`
+ * and `useBottomSheetSafeAreaPaddingStyle` read the screen's bottom inset, not the one left where
+ * the sheet was opened: inside a sheet tab, none is.
+ */
+function CompactSheetBody({
+  header,
+  showCloseButton,
+  onClose,
+  testID,
+  footer,
+  scrollable,
+  bodyStyle,
+  contentStyle,
+  children,
+}: {
+  header?: SheetHeader;
+  showCloseButton: boolean;
+  onClose: () => void;
+  testID?: string;
+  footer: ReactNode;
+  scrollable: boolean;
+  bodyStyle?: StyleProp<ViewStyle>;
+  contentStyle?: StyleProp<ViewStyle>;
+  children: ReactNode;
+}) {
+  // Safe-area clearance is owned on the UI thread in lockstep with `SheetVisibleFrame`'s keyboard
+  // height: `SheetVisibleFrame` pads the frame whenever a footer or non-scrollable body is shown,
+  // while a scrollable body without a footer pads its scroll content so items scroll behind the
+  // system bar and still clear it at rest.
+  const bodyClearanceStyle = useBottomSheetSafeAreaPaddingStyle(scrollable && !footer);
+  return (
+    <SheetVisibleFrame footer={footer} safeAreaInset={scrollable ? "footer" : "frame"}>
+      {header ? (
+        <SheetHeaderView
+          header={header}
+          onClose={onClose}
+          showCloseButton={showCloseButton}
+          testID={testID}
+        />
+      ) : null}
+      <View style={[styles.compactStaticContent, bodyStyle]}>
+        {scrollable ? (
+          <ScrollView
+            style={styles.bottomSheetVisibleScroll}
+            contentContainerStyle={SCROLL_CONTENT_GROW}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            <Animated.View style={[SCROLL_CONTENT_GROW, bodyClearanceStyle]}>
+              <SheetContent style={[styles.contentGrow, contentStyle]}>{children}</SheetContent>
+            </Animated.View>
+          </ScrollView>
+        ) : (
+          <View style={styles.compactStaticContent}>
+            <SheetContent style={[styles.compactStaticContent, contentStyle]}>
+              {children}
+            </SheetContent>
+          </View>
+        )}
+      </View>
+    </SheetVisibleFrame>
+  );
+}
+
+export function AdaptiveModalSheet({
+  header,
+  showCloseButton = true,
+  visible,
+  onClose,
+  onDismiss,
+  children,
+  footer,
+  footerContainerStyle,
+  snapPoints,
+  testID,
+  desktopMaxWidth,
+  desktopHeight,
+  scrollable = true,
+  presentation,
+  contentStyle,
+  bodyStyle,
+  contextBridge = null,
+  keyboard,
+}: AdaptiveModalSheetProps) {
+  const { t } = useTranslation();
+  const isMobile = useIsCompactFormFactor();
+  const resolvedSnapPoints = useMemo(() => snapPoints ?? ["65%", "90%"], [snapPoints]);
+  const isSheet = isMobile || !isWeb;
+  // The sheet registers itself; the desktop dialog does not use it.
+  useDismissibleOverlay(visible && !isSheet, onClose);
+  const footerView = useMemo(
+    () => (footer ? <SheetFooter style={footerContainerStyle}>{footer}</SheetFooter> : null),
+    [footer, footerContainerStyle],
+  );
+  useEffect(() => {
+    if (!isWeb && visible) {
+      // A newly opened sheet owns input. A keyboard belonging to the sheet below
+      // would cover controls in the new sheet, which has no focused input yet.
+      Keyboard.dismiss();
+    }
+  }, [visible]);
+
+  const { sheetRef, handleSheetChange, handleSheetDismiss } = useIsolatedBottomSheetVisibility({
+    visible,
+    isEnabled: isSheet,
+    onClose,
+  });
+  const [shouldRenderWeb, setShouldRenderWeb] = useState(visible);
+  const [isWebClosing, setIsWebClosing] = useState(false);
+  const modalLayer = useGlobalOverlayLayer("modal", visible || shouldRenderWeb);
+  const handleDismiss = useCallback(() => {
+    handleSheetDismiss();
+    onDismiss?.();
+  }, [handleSheetDismiss, onDismiss]);
+
+  const desktopCardStyle = useMemo(
+    () => [
+      styles.desktopCard,
+      desktopHeight != null && { height: desktopHeight },
+      desktopMaxWidth != null && { maxWidth: desktopMaxWidth },
+      isWeb && WEB_ENTER_STYLE,
+    ],
+    [desktopMaxWidth, desktopHeight],
+  );
+  const desktopOverlayStyle = useMemo(
+    () => [
+      styles.desktopOverlay,
+      isWeb && {
+        zIndex: modalLayer,
+        opacity: isWebClosing ? 0 : 1,
+        transitionDuration: `${WEB_EXIT_DURATION_MS}ms`,
+        transitionProperty: "opacity",
+        transitionTimingFunction: "ease",
+      },
+    ],
+    [isWebClosing, modalLayer],
+  );
+
+  const handleOverlayKeyDown = useCallback(
+    (event: KeyboardInputEvent) => {
+      if (event.key !== "Escape") {
+        if (!keyboard?.onKeyDown(event)) return false;
+        event.preventDefault();
+        return true;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
+      return true;
+    },
+    [keyboard, onClose],
+  );
+  const overlayKeys = useMemo(() => ["Escape", ...(keyboard?.keys ?? [])], [keyboard?.keys]);
+  const setOverlayScope = useOverlayRegistration({
+    keys: overlayKeys,
+    active: visible,
+    layer: modalLayer,
+    onKeyDown: handleOverlayKeyDown,
+  });
+
+  useEffect(() => {
+    if (!isWeb || isMobile) return;
+    if (visible) {
+      setShouldRenderWeb(true);
+      setIsWebClosing(false);
+      return;
+    }
+    if (!shouldRenderWeb) return;
+    setIsWebClosing(true);
+    const timeout = window.setTimeout(() => {
+      setShouldRenderWeb(false);
+      setIsWebClosing(false);
+      onDismiss?.();
+    }, WEB_EXIT_DURATION_MS);
+    return () => window.clearTimeout(timeout);
+  }, [visible, isMobile, onDismiss, shouldRenderWeb]);
+
+  if (isMobile) {
+    return (
+      <IsolatedBottomSheetModal
+        ref={sheetRef}
+        contextBridge={contextBridge}
+        snapPoints={resolvedSnapPoints}
+        index={0}
+        enableDynamicSizing={false}
+        onChange={handleSheetChange}
+        onDismiss={handleDismiss}
+        backdropOpacity={0.45}
+        enablePanDownToClose
+        backgroundComponent={SheetBackground}
+        handleComponent={SheetHandle}
+        keyboardBehavior="extend"
+        keyboardBlurBehavior="restore"
+        accessible={false}
+        presentation={presentation}
+      >
+        <OverlayLayerProvider layer={modalLayer}>
+          <CompactSheetBody
+            header={header}
+            showCloseButton={showCloseButton}
+            onClose={onClose}
+            testID={testID}
+            footer={footerView}
+            scrollable={scrollable}
+            bodyStyle={bodyStyle}
+            contentStyle={contentStyle}
+          >
+            {children}
+          </CompactSheetBody>
+        </OverlayLayerProvider>
+      </IsolatedBottomSheetModal>
+    );
+  }
+
+  const desktopStaticStyle =
+    desktopHeight == null ? styles.desktopStaticContent : styles.compactStaticContent;
+  const cardInner = (
+    <OverlayLayerProvider layer={modalLayer}>
+      {header ? (
+        <SheetHeaderView header={header} onClose={onClose} showCloseButton={showCloseButton} />
+      ) : null}
+      <View style={[scrollable ? styles.desktopScrollContainer : desktopStaticStyle, bodyStyle]}>
+        {scrollable ? (
+          <ScrollView
+            style={styles.desktopScroll}
+            contentContainerStyle={SCROLL_CONTENT_GROW}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator
+          >
+            <SheetContent style={[styles.contentGrow, contentStyle]}>{children}</SheetContent>
+          </ScrollView>
+        ) : (
+          <SheetContent style={[desktopStaticStyle, contentStyle]}>{children}</SheetContent>
+        )}
+      </View>
+      {footerView}
+      {header ? null : (
+        <IconButtonChromeProvider value="header-island">
+          <View style={styles.floatingClose}>
+            <SheetHeaderIconButton icon={X} label={t("common.actions.close")} onPress={onClose} />
+          </View>
+        </IconButtonChromeProvider>
+      )}
+    </OverlayLayerProvider>
+  );
+
+  const desktopContent = (
+    <View style={desktopOverlayStyle} testID={testID}>
+      <DismissBackdrop label={t("common.actions.dismiss")} onPress={onClose} />
+      <View ref={setOverlayScope} style={desktopCardStyle} role="dialog" aria-modal tabIndex={-1}>
+        {cardInner}
+      </View>
+    </View>
+  );
+
+  // On web, use portal to overlay root for consistent stacking with toasts
+  if (isWeb && typeof document !== "undefined") {
+    if (!shouldRenderWeb) return null;
+    return createPortal(desktopContent, getOverlayRoot());
+  }
+
+  return (
+    // Both native presentations share Gorhom's app-wide stack. Independent RN Modals
+    // present from their React ancestor's controller, so a root-owned sibling dialog
+    // cannot present while that controller already has a dialog open on iOS.
+    <IsolatedBottomSheetModal
+      ref={sheetRef}
+      contextBridge={contextBridge}
+      snapPoints={NATIVE_DIALOG_SNAP_POINTS}
+      index={0}
+      enableDynamicSizing={false}
+      onChange={handleSheetChange}
+      onDismiss={handleDismiss}
+      handleComponent={null}
+      backgroundStyle={styles.nativeDialogBackground}
+      enablePanDownToClose={false}
+      enableHandlePanningGesture={false}
+      enableContentPanningGesture={false}
+      keyboardBehavior="extend"
+      keyboardBlurBehavior="restore"
+      accessible={false}
+      presentation={presentation}
+    >
+      <View style={styles.nativeDialogSurface}>{desktopContent}</View>
+    </IsolatedBottomSheetModal>
+  );
+}

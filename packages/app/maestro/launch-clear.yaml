@@ -1,0 +1,5 @@
+appId: moe.hoshizukimio.remio
+---
+- launchApp:
+    clearState: true
+- runFlow: flows/dev-client.yaml

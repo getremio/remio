@@ -1,0 +1,17 @@
+# Example child image that adds agent CLIs to the official Remio image.
+#
+# Build:
+#   docker build -f docker/Dockerfile.agents.example -t remio-with-agents .
+#
+# Then set `image: remio-with-agents` in docker/docker-compose.example.yml.
+
+FROM ghcr.io/getremio/remio:latest
+
+USER root
+RUN npm install -g \
+  @anthropic-ai/claude-code \
+  @openai/codex \
+  opencode-ai
+
+# Leave the image user as root. The base entrypoint prepares mounted volumes,
+# then drops the daemon and launched agents to the non-root `remio` user.

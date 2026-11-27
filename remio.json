@@ -1,0 +1,32 @@
+{
+  "worktree": {
+    "setup": [
+      "npm ci",
+      "node ./scripts/seed-ios-native-cache.mjs",
+      "node ./scripts/seed-worktree-dev-state.mjs",
+      "npm run build:server",
+      "npm run build --workspace=@getremio/expo-two-way-audio"
+    ]
+  },
+  "scripts": {
+    "daemon": {
+      "type": "service",
+      "command": "REMIO_DEV_MANAGED_HOME=1 REMIO_DEV_ROOT=\"${REMIO_WORKTREE_PATH:-$PWD}\" REMIO_HOME=\"${REMIO_WORKTREE_PATH:-$PWD}/.dev/remio-home\" REMIO_SKIP_DEV_SERVER_BUILD=1 REMIO_LISTEN=0.0.0.0:${REMIO_PORT:-7677} ./scripts/dev-daemon.sh"
+    },
+    "app": {
+      "type": "service",
+      "command": "REMIO_DEV_MANAGED_HOME=1 REMIO_DEV_ROOT=\"${REMIO_WORKTREE_PATH:-$PWD}\" REMIO_HOME=\"${REMIO_WORKTREE_PATH:-$PWD}/.dev/remio-home\" REMIO_LISTEN=0.0.0.0:${REMIO_SERVICE_DAEMON_PORT:-7677} REMIO_DEV_DAEMON_ENDPOINT=localhost:${REMIO_SERVICE_DAEMON_PORT:-7677} EXPO_PORT=${REMIO_PORT:-} ./scripts/dev-app.sh"
+    },
+    "desktop": {
+      "type": "service",
+      "command": "REMIO_DEV_MANAGED_HOME=1 REMIO_DEV_ROOT=\"${REMIO_WORKTREE_PATH:-$PWD}\" REMIO_HOME=\"${REMIO_WORKTREE_PATH:-$PWD}/.dev/remio-home\" REMIO_LISTEN=0.0.0.0:${REMIO_SERVICE_DAEMON_PORT:-7677} REMIO_DEV_DAEMON_ENDPOINT=localhost:${REMIO_SERVICE_DAEMON_PORT:-7677} EXPO_PORT=${REMIO_PORT:-} exec ./packages/desktop/scripts/dev.sh"
+    },
+    "ios-simulator": {
+      "type": "service",
+      "command": "REMIO_DEV_MANAGED_HOME=1 REMIO_DEV_ROOT=\"$PWD\" REMIO_HOME=\"$PWD/.dev/remio-home\" REMIO_LISTEN=0.0.0.0:${REMIO_SERVICE_DAEMON_PORT} REMIO_DEV_DAEMON_ENDPOINT=localhost:${REMIO_SERVICE_DAEMON_PORT} ./scripts/remio-ios-simulator-service.sh"
+    },
+    "typecheck": {
+      "command": "npm run typecheck"
+    }
+  }
+}

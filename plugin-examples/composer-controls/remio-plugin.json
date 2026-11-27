@@ -1,0 +1,4 @@
+{
+  "id": "composer-controls-example",
+  "requirements": { "remio": ">=0.0.1" }
+}

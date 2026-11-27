@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://remio.hoshizukimio.moe/sitemap-index.xml

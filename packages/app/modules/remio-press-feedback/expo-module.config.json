@@ -1,0 +1,5 @@
+{
+  "platforms": ["android", "ios"],
+  "android": { "modules": ["moe.hoshizukimio.remio.pressfeedback.RemioPressFeedbackModule"] },
+  "ios": { "modules": ["RemioPressFeedbackModule"] }
+}

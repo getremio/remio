@@ -1,0 +1,244 @@
+import { verifyAttachedDaemonControls } from "./daemon-lifecycle-renderer.electron.mjs";
+import { once } from "node:events";
+import assert from "node:assert/strict";
+import { mkdtemp, mkdir, writeFile, readFile, rm, readdir, copyFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import net from "node:net";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { _electron as electron, expect } from "playwright/test";
+import { savePersistedConfig } from "@getremio/server/configuration";
+import {
+  startDaemonInstance,
+  stopDaemonInstance,
+  readDaemonInstance,
+} from "@getremio/server/daemon-control";
+
+const repo = fileURLToPath(new URL("../../..", import.meta.url));
+const root = await mkdtemp(path.join(tmpdir(), "remio desktop lifecycle "));
+const home = path.join(root, "daemon");
+const env = Object.fromEntries(
+  Object.entries(process.env).filter(
+    ([key]) => !key.startsWith("REMIO_") && key !== "ELECTRON_RUN_AS_NODE",
+  ),
+);
+env.HOME = root;
+env.USERPROFILE = root;
+env.REMIO_HOME = home;
+const server = net.createServer();
+await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+const port = server.address().port;
+await new Promise((resolve) => server.close(resolve));
+assert.ok(port !== 7676 && port !== 7677);
+await mkdir(path.join(root, "web"));
+await writeFile(path.join(root, "web/index.html"), "<html><body>Lifecycle web UI</body></html>");
+savePersistedConfig(home, {
+  daemon: { listen: `127.0.0.1:${port}`, relay: { enabled: false } },
+  features: {
+    dictation: { enabled: false },
+    voiceMode: { enabled: false },
+    webUi: { enabled: true, distDir: path.join(root, "web") },
+  },
+});
+const main = path.join(root, "main.cjs");
+const updatedMain = path.join(root, "updated-main.cjs");
+const managerPath = path.join(repo, "packages/desktop/dist/daemon/daemon-manager.js");
+const desktopMain = (setup) =>
+  `const { app } = require("electron"); ${setup} app.setPath("userData", ${JSON.stringify(path.join(root, "user-data"))}); app.whenReady().then(() => { global.lifecycle = require(${JSON.stringify(managerPath)}); });`;
+await writeFile(main, desktopMain(""));
+// An unpackaged Desktop reads its version from packages/desktop/package.json. This entry
+// reports a newer version, standing in for the Desktop an update installs.
+await writeFile(
+  updatedMain,
+  desktopMain(
+    `const fs = require("node:fs"); const path = require("node:path"); const readFileSync = fs.readFileSync; fs.readFileSync = (file, ...rest) => typeof file === "string" && path.relative(${JSON.stringify(path.join(repo, "packages/desktop"))}, file) === "package.json" ? JSON.stringify({ version: "999.0.0" }) : readFileSync(file, ...rest);`,
+  ),
+);
+let desktop;
+let captured;
+async function openDesktop(entry = main) {
+  desktop = await electron.launch({
+    args: ["--no-sandbox", "--ozone-platform=headless", entry],
+    env: {
+      ...env,
+      REMIO_LISTEN: "127.0.0.1:1",
+      REMIO_WEB_UI_ENABLED: "false",
+      REMIO_HOST: "unused:1",
+    },
+  });
+  await expect
+    .poll(() => desktop.evaluate(() => Boolean(global.lifecycle)), { timeout: 10_000 })
+    .toBe(true);
+}
+async function closeDesktop() {
+  if (!desktop) return;
+  const child = desktop.process();
+  const exited = once(child, "exit");
+  await desktop.evaluate(({ app }) => app.exit(0)).catch(() => {});
+  await exited;
+  desktop = null;
+}
+async function command(name, args) {
+  console.log(`Desktop command: ${name}${args?.reason ? ` (${args.reason})` : ""}`);
+  return desktop.evaluate(
+    async (_, input) => global.lifecycle.createDaemonCommandHandlers()[input.name](input.args),
+    { name, args },
+  );
+}
+try {
+  // A daemon the user started through the CLI, which Desktop must never stop on its own.
+  // Older bundled CLIs exported REMIO_DESKTOP_MANAGED, and the CLI launch must not record it.
+  const launch = await startDaemonInstance({
+    home,
+    command: process.execPath,
+    args: [path.join(repo, "packages/server/dist/scripts/supervisor-entrypoint.js")],
+    env: { ...env, REMIO_DESKTOP_MANAGED: "1" },
+    mode: "deployment",
+    timeoutMs: 30_000,
+  });
+  captured = launch.instance;
+  await openDesktop();
+  const attached = await command("start_desktop_daemon");
+  assert.equal(attached.pid, captured.pid);
+  assert.equal(attached.desktopManaged, false);
+  assert.equal(attached.ownedByDesktop, false);
+  for (const reason of ["quit", "settings", "app_update", "host_remove", "version_mismatch"]) {
+    const status = await command("stop_desktop_daemon", { reason });
+    assert.equal(status.pid, captured.pid, `${reason} stopped an attached daemon`);
+    process.kill(captured.pid, 0);
+  }
+  await closeDesktop();
+  await openDesktop(updatedMain);
+  const afterUpdate = await command("start_desktop_daemon");
+  assert.equal(afterUpdate.pid, captured.pid, "a newer Desktop replaced a daemon the user started");
+  const restarted = await command("restart_desktop_daemon");
+  assert.equal(restarted.pid, captured.pid);
+  await assert.rejects(
+    command("stop_desktop_daemon", {
+      reason: "manual_ipc",
+      pid: captured.pid,
+      startedAt: "outdated-confirmation",
+    }),
+    /changed since confirmation/,
+  );
+  const stopped = await command("stop_desktop_daemon", {
+    reason: "manual_ipc",
+    pid: captured.pid,
+    startedAt: captured.startedAt,
+  });
+  assert.equal(stopped.status, "stopped");
+  captured = null;
+
+  const owned = await command("start_desktop_daemon");
+  captured = await readDaemonInstance(home);
+  assert.equal(owned.pid, captured.pid);
+  assert.equal(owned.ownedByDesktop, true);
+  assert.equal(owned.listen, `127.0.0.1:${port}`);
+  assert.equal(
+    JSON.parse(await readFile(path.join(home, "config.json"), "utf8")).features.webUi.enabled,
+    true,
+  );
+  const liveWebUi = await fetch(`http://127.0.0.1:${port}/`);
+  assert.equal(liveWebUi.status, 200);
+  assert.match(await liveWebUi.text(), /Lifecycle web UI/);
+  await command("patch_desktop_settings", { daemon: { keepRunningAfterQuit: true } });
+  await closeDesktop();
+  desktop = null;
+  process.kill(captured.pid, 0);
+  await openDesktop();
+  // The next session attaches to the daemon Desktop launched before it quit.
+  const survivor = await command("start_desktop_daemon");
+  assert.equal(survivor.pid, captured.pid);
+  assert.equal(survivor.desktopManaged, true);
+  assert.equal(survivor.ownedByDesktop, false);
+  for (const reason of ["quit", "settings", "host_remove"]) {
+    await command("stop_desktop_daemon", { reason });
+    process.kill(captured.pid, 0);
+  }
+  // With management off, Desktop leaves the daemon running through an update.
+  await command("patch_desktop_settings", { daemon: { manageBuiltInDaemon: false } });
+  await command("stop_desktop_daemon", { reason: "app_update" });
+  process.kill(captured.pid, 0);
+  await command("patch_desktop_settings", { daemon: { manageBuiltInDaemon: true } });
+  // Installing an update stops it, so the updated Desktop starts its own daemon.
+  const beforeInstall = await command("stop_desktop_daemon", { reason: "app_update" });
+  assert.equal(beforeInstall.status, "stopped", "app_update left Desktop's daemon running");
+  captured = null;
+  const next = await command("start_desktop_daemon");
+  captured = await readDaemonInstance(home);
+  assert.equal(next.ownedByDesktop, true);
+  await closeDesktop();
+  process.kill(captured.pid, 0);
+  // A newer Desktop replaces the daemon an older Desktop launched and kept running.
+  const outdated = captured;
+  await openDesktop(updatedMain);
+  const replaced = await command("start_desktop_daemon");
+  captured = await readDaemonInstance(home);
+  assert.notEqual(replaced.pid, outdated.pid, "a newer Desktop kept the outdated daemon");
+  assert.equal(replaced.ownedByDesktop, true);
+  assert.throws(() => process.kill(outdated.pid, 0), "the outdated daemon is still running");
+  await command("stop_desktop_daemon", { reason: "quit" });
+  assert.equal(await readDaemonInstance(home), null);
+  captured = null;
+  await closeDesktop();
+  if (process.platform === "linux") {
+    const rendererLaunch = await startDaemonInstance({
+      home,
+      command: process.execPath,
+      args: [path.join(repo, "packages/server/dist/scripts/supervisor-entrypoint.js")],
+      env,
+      mode: "deployment",
+      desktopManaged: true,
+      timeoutMs: 30_000,
+    });
+    captured = rendererLaunch.instance;
+    await verifyAttachedDaemonControls({ repo, root, env, home, port, instance: captured });
+    captured = null;
+  }
+  if (process.platform !== "win32") {
+    const preload = path.join(root, "slow-worker.mjs");
+    await writeFile(
+      preload,
+      'if (process.argv[1]?.endsWith("daemon-worker.js")) await new Promise(resolve => setTimeout(resolve, 45000));',
+    );
+    await openDesktop();
+    // Playwright removes NODE_OPTIONS from electron.launch's environment.
+    // Restore this runtime input inside the isolated fixture before it launches the daemon.
+    await desktop.evaluate(
+      (_, value) => {
+        process.env.NODE_OPTIONS = value;
+      },
+      `--import=${pathToFileURL(preload).href}`,
+    );
+    const began = Date.now();
+    const starting = await command("start_desktop_daemon");
+    captured = await readDaemonInstance(home);
+    assert.equal(starting.status, "starting");
+    assert.equal(starting.ownedByDesktop, true);
+    assert.equal(starting.pid, captured.pid);
+    assert.ok(Date.now() - began < 40_000, "Desktop did not return its bounded starting state");
+    process.kill(captured.pid, 0);
+    await command("stop_desktop_daemon", { reason: "quit" });
+    captured = null;
+    await closeDesktop();
+    console.log(
+      "PASS: Desktop readiness deadline returns starting and preserves its owned slow launch.",
+    );
+  }
+  console.log(
+    "PASS: a user-started daemon survives automatic actions and updates; explicit captured stop, owned launch, managed settings, worker restart, next-session attachment, and update replacement of an earlier session's daemon.",
+  );
+} finally {
+  await closeDesktop();
+  if (captured)
+    await stopDaemonInstance(home, { instance: captured, force: true, timeoutMs: 2_000 });
+  const artifacts =
+    process.env.REMIO_DESKTOP_LIFECYCLE_ARTIFACT_DIR ??
+    (await mkdtemp(path.join(tmpdir(), "remio-desktop-lifecycle-artifacts-")));
+  await mkdir(artifacts, { recursive: true });
+  for (const name of await readdir(root))
+    if (name.endsWith(".png") || name === "metro.log")
+      await copyFile(path.join(root, name), path.join(artifacts, name));
+  await rm(root, { recursive: true, force: true });
+  console.log(`Lifecycle artifacts: ${artifacts}`);
+}

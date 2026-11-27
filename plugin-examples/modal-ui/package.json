@@ -1,0 +1,29 @@
+{
+  "name": "@getremio/plugin-example-modal-ui",
+  "version": "0.1.1",
+  "description": "Interactive Remio plugin example for modal forms, scrolling, and clipboard actions",
+  "homepage": "https://remio.hoshizukimio.moe/docs/plugins",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/getremio/remio.git",
+    "directory": "plugin-examples/modal-ui"
+  },
+  "files": [
+    "remio-plugin.json",
+    "index.client.tsx",
+    "client/",
+    "screenshots/",
+    "LICENSE"
+  ],
+  "type": "module",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
+  "peerDependencies": {
+    "@getremio/plugin": ">=0.8.0",
+    "react": ">=19",
+    "react-native": ">=0.81"
+  }
+}

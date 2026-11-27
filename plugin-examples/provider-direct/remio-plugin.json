@@ -1,0 +1,6 @@
+{
+  "id": "provider-direct-example",
+  "requirements": {
+    "remio": ">=0.0.1"
+  }
+}

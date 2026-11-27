@@ -1,0 +1,874 @@
+import { promises as fs } from "node:fs";
+import { createHash } from "node:crypto";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import {
+  autoUpdateInstalledSkills,
+  getSkillsStatus,
+  installSkills,
+  LEGACY_SKILL_NAMES,
+  type SkillSelection,
+  type SkillTargets,
+  uninstallSkills,
+  updateSkills,
+} from "./operations";
+
+const ALL_SKILLS: SkillSelection = { mode: "all" };
+
+function only(...skills: string[]): SkillSelection {
+  return { mode: "custom", skills };
+}
+
+interface TestSkillTargets extends SkillTargets {
+  agentsDir: string;
+  claudeDir: string;
+  antigravityDir: string;
+  installDirs: string[];
+}
+
+interface Sandbox {
+  root: string;
+  targets: TestSkillTargets;
+}
+
+async function makeSandbox(): Promise<Sandbox> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "remio-skills-"));
+  const agentsDir = path.join(root, "home", ".agents", "skills");
+  const claudeDir = path.join(root, "home", ".claude", "skills");
+  const codexDir = path.join(root, "home", ".codex", "skills");
+  const antigravityDir = path.join(root, "home", ".gemini", "config", "skills");
+  const targets: TestSkillTargets = {
+    sourceDir: path.join(root, "bundle"),
+    installDirs: [agentsDir, claudeDir, antigravityDir],
+    agentsDir,
+    claudeDir,
+    codexDir,
+    antigravityDir,
+  };
+  await fs.mkdir(targets.sourceDir, { recursive: true });
+  return { root, targets };
+}
+
+async function writeFiles(rootDir: string, files: Record<string, string>): Promise<void> {
+  for (const [rel, content] of Object.entries(files)) {
+    const full = path.join(rootDir, rel);
+    await fs.mkdir(path.dirname(full), { recursive: true });
+    await fs.writeFile(full, content);
+  }
+}
+
+async function writeBundleSkill(
+  sourceDir: string,
+  name: string,
+  files: Record<string, string>,
+): Promise<void> {
+  await writeFiles(path.join(sourceDir, name), files);
+}
+
+async function writeOnDiskSkill(
+  agentsDir: string,
+  name: string,
+  files: Record<string, string>,
+): Promise<void> {
+  await writeFiles(path.join(agentsDir, name), files);
+}
+
+async function writeOnDiskSkillToAllTargets(
+  targets: TestSkillTargets,
+  name: string,
+  files: Record<string, string>,
+): Promise<void> {
+  await Promise.all([
+    writeOnDiskSkill(targets.agentsDir, name, files),
+    writeOnDiskSkill(targets.claudeDir, name, files),
+    writeOnDiskSkill(targets.codexDir, name, files),
+    writeOnDiskSkill(targets.antigravityDir, name, files),
+  ]);
+}
+
+async function writeCurrentBundle(sourceDir: string): Promise<void> {
+  await writeBundleSkill(sourceDir, "remio", { "SKILL.md": "remio-v1" });
+  await writeBundleSkill(sourceDir, "remio-loop", { "SKILL.md": "loop-v1" });
+}
+
+async function pathExists(p: string): Promise<boolean> {
+  return fs
+    .access(p)
+    .then(() => true)
+    .catch(() => false);
+}
+
+async function installedIn(targets: TestSkillTargets, name: string): Promise<boolean[]> {
+  return Promise.all(
+    [targets.agentsDir, targets.claudeDir, targets.codexDir, targets.antigravityDir].map((dir) =>
+      pathExists(path.join(dir, name)),
+    ),
+  );
+}
+
+describe("getSkillsStatus", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox();
+  });
+
+  afterEach(async () => {
+    await fs.rm(sandbox.root, { recursive: true, force: true });
+  });
+
+  it("returns not-installed with add ops for every bundled skill when nothing is on disk", async () => {
+    await writeCurrentBundle(sandbox.targets.sourceDir);
+
+    const status = await getSkillsStatus(sandbox.targets, ALL_SKILLS);
+
+    expect(status.state).toBe("not-installed");
+    expect(status.ops).toEqual([
+      { kind: "add", name: "remio" },
+      { kind: "add", name: "remio-loop" },
+    ]);
+  });
+
+  it("reports every bundled skill as available", async () => {
+    await writeCurrentBundle(sandbox.targets.sourceDir);
+    await writeBundleSkill(sandbox.targets.sourceDir, "remio-advisor", {
+      "SKILL.md": "advisor-v1",
+    });
+
+    const status = await getSkillsStatus(sandbox.targets, only("remio"));
+
+    expect(status.available).toEqual(["remio", "remio-advisor", "remio-loop"]);
+  });
+
+  it("reports a skill present in only one target as installed", async () => {
+    await writeCurrentBundle(sandbox.targets.sourceDir);
+    await writeOnDiskSkill(sandbox.targets.claudeDir, "remio", { "SKILL.md": "remio-v1" });
+
+    const status = await getSkillsStatus(sandbox.targets, ALL_SKILLS);
+
+    // `add` means "missing from at least one target", so it cannot answer
+    // "is there a directory here to delete". `installed` answers that.
+    expect(status.installed).toEqual(["remio"]);
+    expect(status.ops).toEqual([
+      { kind: "add", name: "remio" },
+      { kind: "add", name: "remio-loop" },
+    ]);
+  });
+
+  it("reports legacy skill directories left on disk as installed", async () => {
+    await writeCurrentBundle(sandbox.targets.sourceDir);
+    await writeOnDiskSkill(sandbox.targets.agentsDir, "remio-chat", { "SKILL.md": "chat-old" });
+
+    expect((await getSkillsStatus(sandbox.targets, ALL_SKILLS)).installed).toEqual(["remio-chat"]);
+  });
+
+  it("returns not-installed when only user-personal skill dirs exist (the live bug)", async () => {
+    await writeCurrentBundle(sandbox.targets.sourceDir);
+    for (const name of ["unslop", "tdd", "devbox"]) {
+      await writeOnDiskSkill(sandbox.targets.agentsDir, name, { "SKILL.md": `user-${name}` });
+    }
+
+    const status = await getSkillsStatus(sandbox.targets, ALL_SKILLS);
+
+    expect(status.state).toBe("not-installed");
+    expect(status.ops).toEqual([
+      { kind: "add", name: "remio" },
+      { kind: "add", name: "remio-loop" },
+    ]);
+  });
+
+  it("returns up-to-date when every bundled skill matches on disk", async () => {
+    await writeCurrentBundle(sandbox.targets.sourceDir);
+    await writeOnDiskSkillToAllTargets(sandbox.targets, "remio", { "SKILL.md": "remio-v1" });
+    await writeOnDiskSkillToAllTargets(sandbox.targets, "remio-loop", { "SKILL.md": "loop-v1" });
+
+    const status = await getSkillsStatus(sandbox.targets, ALL_SKILLS);
+
+    expect(status).toEqual({
+      state: "up-to-date",
+      ops: [],
+      available: ["remio", "remio-loop"],
+      installed: ["remio", "remio-loop"],
+    });
+  });
+
+  it("ignores user-added files inside current managed skill dirs in every target", async () => {
+    await writeCurrentBundle(sandbox.targets.sourceDir);
+    await writeOnDiskSkillToAllTargets(sandbox.targets, "remio", { "SKILL.md": "remio-v1" });
+    await writeOnDiskSkillToAllTargets(sandbox.targets, "remio-loop", { "SKILL.md": "loop-v1" });
+    await writeOnDiskSkill(sandbox.targets.agentsDir, "remio", {
+      "SKILL.md": "remio-v1",
+      "my-context.md": "user context",
+    });
+    await writeOnDiskSkill(sandbox.targets.claudeDir, "remio", {
+      "SKILL.md": "remio-v1",
+      "commands/local.md": "user command",
+    });
+    await writeOnDiskSkill(sandbox.targets.codexDir, "remio", {
+      "SKILL.md": "remio-v1",
+      "hooks/guard.sh": "user guard",
+    });
+    await writeOnDiskSkill(sandbox.targets.antigravityDir, "remio", {
+      "SKILL.md": "remio-v1",
+      "notes/local.md": "user notes",
+    });
+
+    const status = await getSkillsStatus(sandbox.targets, ALL_SKILLS);
+
+    expect(status).toEqual({
+      state: "up-to-date",
+      ops: [],
+      available: ["remio", "remio-loop"],
+      installed: ["remio", "remio-loop"],
+    });
+  });
+
+  it("returns drift with a single update op when one bundled file diverges", async () => {
+    await writeCurrentBundle(sandbox.targets.sourceDir);
+    await writeOnDiskSkill(sandbox.targets.agentsDir, "remio", { "SKILL.md": "stale" });
+    await writeOnDiskSkill(sandbox.targets.claudeDir, "remio", { "SKILL.md": "remio-v1" });
+    await writeOnDiskSkill(sandbox.targets.codexDir, "remio", { "SKILL.md": "remio-v1" });
+    await writeOnDiskSkill(sandbox.targets.antigravityDir, "remio", { "SKILL.md": "remio-v1" });
+    await writeOnDiskSkillToAllTargets(sandbox.targets, "remio-loop", { "SKILL.md": "loop-v1" });
+
+    const status = await getSkillsStatus(sandbox.targets, ALL_SKILLS);
+
+    expect(status.state).toBe("drift");
+    expect(status.ops).toEqual([{ kind: "update", name: "remio" }]);
+  });
+
+  it("returns drift when a secondary agent target is stale", async () => {
+    await writeCurrentBundle(sandbox.targets.sourceDir);
+    await writeOnDiskSkill(sandbox.targets.agentsDir, "remio", { "SKILL.md": "remio-v1" });
+    await writeOnDiskSkill(sandbox.targets.agentsDir, "remio-loop", { "SKILL.md": "loop-v1" });
+    await writeOnDiskSkill(sandbox.targets.claudeDir, "remio", { "SKILL.md": "stale" });
+    await writeOnDiskSkill(sandbox.targets.claudeDir, "remio-loop", { "SKILL.md": "loop-v1" });
+    await writeOnDiskSkill(sandbox.targets.codexDir, "remio", { "SKILL.md": "remio-v1" });
+    await writeOnDiskSkill(sandbox.targets.codexDir, "remio-loop", { "SKILL.md": "loop-v1" });
+    await writeOnDiskSkill(sandbox.targets.antigravityDir, "remio", { "SKILL.md": "remio-v1" });
+    await writeOnDiskSkill(sandbox.targets.antigravityDir, "remio-loop", { "SKILL.md": "loop-v1" });
+
+    const status = await getSkillsStatus(sandbox.targets, ALL_SKILLS);
+
+    expect(status.state).toBe("drift");
+    expect(status.ops).toEqual([{ kind: "update", name: "remio" }]);
+  });
+
+  it("returns drift when Antigravity is missing or stale", async () => {
+    await writeCurrentBundle(sandbox.targets.sourceDir);
+    await writeOnDiskSkill(sandbox.targets.agentsDir, "remio", { "SKILL.md": "remio-v1" });
+    await writeOnDiskSkill(sandbox.targets.agentsDir, "remio-loop", { "SKILL.md": "loop-v1" });
+    await writeOnDiskSkill(sandbox.targets.claudeDir, "remio", { "SKILL.md": "remio-v1" });
+    await writeOnDiskSkill(sandbox.targets.claudeDir, "remio-loop", { "SKILL.md": "loop-v1" });
+    await writeOnDiskSkill(sandbox.targets.antigravityDir, "remio", { "SKILL.md": "stale" });
+
+    const status = await getSkillsStatus(sandbox.targets, ALL_SKILLS);
+
+    expect(status.state).toBe("drift");
+    expect(status.ops).toEqual([
+      { kind: "update", name: "remio" },
+      { kind: "add", name: "remio-loop" },
+    ]);
+  });
+
+  it("returns not-installed when only user-personal skills exist in Antigravity", async () => {
+    await writeCurrentBundle(sandbox.targets.sourceDir);
+    await writeOnDiskSkill(sandbox.targets.antigravityDir, "my-agy-skill", {
+      "SKILL.md": "user-agy",
+    });
+
+    const status = await getSkillsStatus(sandbox.targets, ALL_SKILLS);
+
+    expect(status.state).toBe("not-installed");
+    expect(status.installed).toEqual([]);
+  });
+
+  it("returns drift with add ops for the bundled skills missing from disk", async () => {
+    await writeCurrentBundle(sandbox.targets.sourceDir);
+    await writeOnDiskSkillToAllTargets(sandbox.targets, "remio", { "SKILL.md": "remio-v1" });
+
+    const status = await getSkillsStatus(sandbox.targets, ALL_SKILLS);
+
+    expect(status.state).toBe("drift");
+    expect(status.ops).toEqual([{ kind: "add", name: "remio-loop" }]);
+  });
+
+  it("returns drift with a delete op for a legacy skill name still on disk", async () => {
+    await writeCurrentBundle(sandbox.targets.sourceDir);
+    await writeOnDiskSkillToAllTargets(sandbox.targets, "remio", { "SKILL.md": "remio-v1" });
+    await writeOnDiskSkillToAllTargets(sandbox.targets, "remio-loop", { "SKILL.md": "loop-v1" });
+    await writeOnDiskSkill(sandbox.targets.agentsDir, "remio-chat", { "SKILL.md": "chat-old" });
+
+    const status = await getSkillsStatus(sandbox.targets, ALL_SKILLS);
+
+    expect(status.state).toBe("drift");
+    expect(status.ops).toEqual([{ kind: "delete", name: "remio-chat" }]);
+  });
+
+  it("emits add + update + delete ops sorted by name when state is mixed", async () => {
+    await writeCurrentBundle(sandbox.targets.sourceDir);
+    await writeOnDiskSkill(sandbox.targets.agentsDir, "remio", { "SKILL.md": "stale" });
+    await writeOnDiskSkill(sandbox.targets.claudeDir, "remio", { "SKILL.md": "remio-v1" });
+    await writeOnDiskSkill(sandbox.targets.codexDir, "remio", { "SKILL.md": "remio-v1" });
+    await writeOnDiskSkill(sandbox.targets.antigravityDir, "remio", { "SKILL.md": "remio-v1" });
+    await writeOnDiskSkill(sandbox.targets.agentsDir, "remio-chat", { "SKILL.md": "chat-old" });
+
+    const status = await getSkillsStatus(sandbox.targets, ALL_SKILLS);
+
+    expect(status.state).toBe("drift");
+    expect(status.ops).toEqual([
+      { kind: "update", name: "remio" },
+      { kind: "delete", name: "remio-chat" },
+      { kind: "add", name: "remio-loop" },
+    ]);
+  });
+});
+
+describe("custom skill selection", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox();
+    await writeCurrentBundle(sandbox.targets.sourceDir);
+    await writeBundleSkill(sandbox.targets.sourceDir, "remio-advisor", {
+      "SKILL.md": "advisor-v1",
+    });
+  });
+
+  afterEach(async () => {
+    await fs.rm(sandbox.root, { recursive: true, force: true });
+  });
+
+  it("installs only the selected skills", async () => {
+    const status = await installSkills(sandbox.targets, only("remio", "remio-loop"));
+
+    expect(status).toEqual({
+      state: "up-to-date",
+      ops: [],
+      available: ["remio", "remio-advisor", "remio-loop"],
+      installed: ["remio", "remio-loop"],
+    });
+    expect(await installedIn(sandbox.targets, "remio")).toEqual([true, true, false, true]);
+    expect(await installedIn(sandbox.targets, "remio-loop")).toEqual([true, true, false, true]);
+    expect(await installedIn(sandbox.targets, "remio-advisor")).toEqual([
+      false,
+      false,
+      false,
+      false,
+    ]);
+  });
+
+  it("reports up-to-date while an unselected bundled skill is absent", async () => {
+    await installSkills(sandbox.targets, only("remio"));
+
+    const status = await getSkillsStatus(sandbox.targets, only("remio"));
+
+    expect(status).toEqual({
+      state: "up-to-date",
+      ops: [],
+      available: ["remio", "remio-advisor", "remio-loop"],
+      installed: ["remio"],
+    });
+  });
+
+  it("removes a previously installed skill once it leaves the selection", async () => {
+    await installSkills(sandbox.targets, ALL_SKILLS);
+
+    const status = await installSkills(sandbox.targets, only("remio"));
+
+    expect(status.state).toBe("up-to-date");
+    expect(await installedIn(sandbox.targets, "remio")).toEqual([true, true, false, true]);
+    expect(await installedIn(sandbox.targets, "remio-loop")).toEqual([false, false, false, false]);
+    expect(await installedIn(sandbox.targets, "remio-advisor")).toEqual([
+      false,
+      false,
+      false,
+      false,
+    ]);
+  });
+
+  it("reports a delete op for a deselected skill before it is applied", async () => {
+    await installSkills(sandbox.targets, ALL_SKILLS);
+
+    const status = await getSkillsStatus(sandbox.targets, only("remio", "remio-advisor"));
+
+    expect(status.state).toBe("drift");
+    expect(status.ops).toEqual([{ kind: "delete", name: "remio-loop" }]);
+  });
+
+  it("leaves unrelated user skills untouched", async () => {
+    await writeOnDiskSkill(sandbox.targets.agentsDir, "unslop", { "SKILL.md": "user-unslop" });
+    await writeOnDiskSkill(sandbox.targets.antigravityDir, "custom-agy", {
+      "SKILL.md": "user-agy",
+    });
+
+    await installSkills(sandbox.targets, only("remio"));
+
+    expect(
+      await fs.readFile(path.join(sandbox.targets.agentsDir, "unslop", "SKILL.md"), "utf-8"),
+    ).toBe("user-unslop");
+    expect(
+      await fs.readFile(
+        path.join(sandbox.targets.antigravityDir, "custom-agy", "SKILL.md"),
+        "utf-8",
+      ),
+    ).toBe("user-agy");
+  });
+
+  it("treats an empty custom selection as no managed skills installed", async () => {
+    await installSkills(sandbox.targets, ALL_SKILLS);
+
+    const status = await installSkills(sandbox.targets, only());
+
+    expect(status).toEqual({
+      state: "not-installed",
+      ops: [],
+      available: ["remio", "remio-advisor", "remio-loop"],
+      installed: [],
+    });
+    expect(await installedIn(sandbox.targets, "remio")).toEqual([false, false, false, false]);
+    expect(await installedIn(sandbox.targets, "remio-loop")).toEqual([false, false, false, false]);
+  });
+
+  it("ignores selected names that the bundle does not ship", async () => {
+    const status = await installSkills(sandbox.targets, only("remio", "not-a-skill"));
+
+    expect(status).toEqual({
+      state: "up-to-date",
+      ops: [],
+      available: ["remio", "remio-advisor", "remio-loop"],
+      installed: ["remio"],
+    });
+    expect(await installedIn(sandbox.targets, "not-a-skill")).toEqual([false, false, false, false]);
+  });
+
+  it("still deletes legacy skill names that are not selectable", async () => {
+    await writeOnDiskSkillToAllTargets(sandbox.targets, "remio-orchestrator", {
+      "SKILL.md": "orchestrator-old",
+    });
+
+    await installSkills(sandbox.targets, only("remio"));
+
+    expect(await installedIn(sandbox.targets, "remio-orchestrator")).toEqual([
+      false,
+      false,
+      false,
+      false,
+    ]);
+  });
+});
+
+describe("installSkills / updateSkills", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox();
+  });
+
+  afterEach(async () => {
+    await fs.rm(sandbox.root, { recursive: true, force: true });
+  });
+
+  it("installs into shared, Claude, and Antigravity roots without duplicating Codex discovery", async () => {
+    await writeCurrentBundle(sandbox.targets.sourceDir);
+    await writeOnDiskSkill(sandbox.targets.agentsDir, "unslop", { "SKILL.md": "user-unslop" });
+    await writeOnDiskSkill(sandbox.targets.antigravityDir, "custom-agy", {
+      "SKILL.md": "user-agy",
+    });
+
+    const status = await installSkills(sandbox.targets, ALL_SKILLS);
+
+    expect(status).toEqual({
+      state: "up-to-date",
+      ops: [],
+      available: ["remio", "remio-loop"],
+      installed: ["remio", "remio-loop"],
+    });
+    for (const name of ["remio", "remio-loop"]) {
+      const expected = name === "remio" ? "remio-v1" : "loop-v1";
+      expect(
+        await fs.readFile(path.join(sandbox.targets.agentsDir, name, "SKILL.md"), "utf-8"),
+      ).toBe(expected);
+      expect(await pathExists(path.join(sandbox.targets.codexDir, name, "SKILL.md"))).toBe(false);
+      expect(await pathExists(path.join(sandbox.targets.claudeDir, name))).toBe(true);
+      expect(
+        await fs.readFile(path.join(sandbox.targets.antigravityDir, name, "SKILL.md"), "utf-8"),
+      ).toBe(expected);
+    }
+    expect(
+      await fs.readFile(path.join(sandbox.targets.agentsDir, "unslop", "SKILL.md"), "utf-8"),
+    ).toBe("user-unslop");
+    expect(
+      await fs.readFile(
+        path.join(sandbox.targets.antigravityDir, "custom-agy", "SKILL.md"),
+        "utf-8",
+      ),
+    ).toBe("user-agy");
+  });
+
+  it("retires unchanged managed Codex copies while preserving personal files", async () => {
+    await writeCurrentBundle(sandbox.targets.sourceDir);
+    await installSkills(sandbox.targets, ALL_SKILLS);
+    const legacy = path.join(sandbox.targets.codexDir, "remio");
+    const managed = { "SKILL.md": "remio-v1", "references/old.md": "bundled reference" };
+    const hashes = Object.fromEntries(
+      Object.entries(managed).map(([name, content]) => [
+        name,
+        createHash("sha256").update(content).digest("hex"),
+      ]),
+    );
+    await writeFiles(legacy, {
+      ...managed,
+      "notes/mine.md": "personal notes",
+      ".remio-managed-files.json": JSON.stringify({ version: 1, files: hashes }),
+    });
+    const status = await autoUpdateInstalledSkills(sandbox.targets, ALL_SKILLS);
+    expect(status.state).toBe("up-to-date");
+    expect(status.ops).toEqual([]);
+    expect(await pathExists(path.join(legacy, "SKILL.md"))).toBe(false);
+    expect(await pathExists(path.join(legacy, "references/old.md"))).toBe(false);
+    expect(await fs.readFile(path.join(legacy, "notes/mine.md"), "utf8")).toBe("personal notes");
+    expect(await autoUpdateInstalledSkills(sandbox.targets, ALL_SKILLS)).toEqual(status);
+  });
+
+  it("keeps edited or untracked Codex skill definitions", async () => {
+    await writeCurrentBundle(sandbox.targets.sourceDir);
+    await installSkills(sandbox.targets, ALL_SKILLS);
+    const originalHash = createHash("sha256").update("remio-v1").digest("hex");
+    await writeOnDiskSkill(sandbox.targets.codexDir, "remio", {
+      "SKILL.md": "personalized skill",
+      ".remio-managed-files.json": JSON.stringify({
+        version: 1,
+        files: { "SKILL.md": originalHash },
+      }),
+    });
+    await writeOnDiskSkill(sandbox.targets.codexDir, "remio-loop", {
+      "SKILL.md": "untracked skill",
+    });
+    expect((await autoUpdateInstalledSkills(sandbox.targets, ALL_SKILLS)).state).toBe("up-to-date");
+    expect(
+      await fs.readFile(path.join(sandbox.targets.codexDir, "remio", "SKILL.md"), "utf8"),
+    ).toBe("personalized skill");
+    expect(
+      await fs.readFile(path.join(sandbox.targets.codexDir, "remio-loop", "SKILL.md"), "utf8"),
+    ).toBe("untracked skill");
+  });
+
+  it.each([
+    { alias: "codex", target: "agents", expected: [true, true, true, true] },
+    { alias: "codex", target: "claude", expected: [true, true, true, true] },
+    { alias: "claude", target: "codex", expected: [true, true, true, true] },
+    { alias: "codex", target: "antigravity", expected: [true, true, true, true] },
+    { alias: "antigravity", target: "codex", expected: [true, true, true, true] },
+    { alias: "antigravity", target: "agents", expected: [true, true, false, true] },
+    { alias: "antigravity", target: "claude", expected: [true, true, false, true] },
+  ] as const)(
+    "keeps installed skills when the $alias root links to the $target root",
+    async ({ alias, target, expected }) => {
+      await writeCurrentBundle(sandbox.targets.sourceDir);
+      const rootOf = {
+        agents: "agentsDir",
+        claude: "claudeDir",
+        codex: "codexDir",
+        antigravity: "antigravityDir",
+      } as const;
+      const aliasRoot = sandbox.targets[rootOf[alias]];
+      const targetRoot = sandbox.targets[rootOf[target]];
+      await fs.mkdir(targetRoot, { recursive: true });
+      await fs.mkdir(path.dirname(aliasRoot), { recursive: true });
+      await fs.symlink(targetRoot, aliasRoot, "dir");
+
+      const installed = await installSkills(sandbox.targets, ALL_SKILLS);
+      const updated = await autoUpdateInstalledSkills(sandbox.targets, ALL_SKILLS);
+
+      expect(installed.state).toBe("up-to-date");
+      expect(updated.state).toBe("up-to-date");
+      expect((await fs.lstat(aliasRoot)).isSymbolicLink()).toBe(true);
+      for (const name of ["remio", "remio-loop"]) {
+        expect(await installedIn(sandbox.targets, name)).toEqual([...expected]);
+      }
+    },
+  );
+
+  it("keeps an installed skill when its Antigravity directory links to the shared copy", async () => {
+    await writeCurrentBundle(sandbox.targets.sourceDir);
+    await fs.mkdir(path.join(sandbox.targets.agentsDir, "remio"), { recursive: true });
+    await fs.mkdir(sandbox.targets.antigravityDir, { recursive: true });
+    await fs.symlink(
+      path.join(sandbox.targets.agentsDir, "remio"),
+      path.join(sandbox.targets.antigravityDir, "remio"),
+      "dir",
+    );
+
+    const installed = await installSkills(sandbox.targets, ALL_SKILLS);
+    const updated = await autoUpdateInstalledSkills(sandbox.targets, ALL_SKILLS);
+
+    expect(installed.state).toBe("up-to-date");
+    expect(updated.state).toBe("up-to-date");
+    expect(
+      (await fs.lstat(path.join(sandbox.targets.antigravityDir, "remio"))).isSymbolicLink(),
+    ).toBe(true);
+    expect(
+      await fs.readFile(path.join(sandbox.targets.antigravityDir, "remio", "SKILL.md"), "utf8"),
+    ).toBe("remio-v1");
+  });
+
+  it("keeps an installed skill when its Codex directory links to the shared copy", async () => {
+    await writeCurrentBundle(sandbox.targets.sourceDir);
+    await fs.mkdir(path.join(sandbox.targets.agentsDir, "remio"), { recursive: true });
+    await fs.mkdir(sandbox.targets.codexDir, { recursive: true });
+    await fs.symlink(
+      path.join(sandbox.targets.agentsDir, "remio"),
+      path.join(sandbox.targets.codexDir, "remio"),
+      "dir",
+    );
+
+    const installed = await installSkills(sandbox.targets, ALL_SKILLS);
+    const updated = await autoUpdateInstalledSkills(sandbox.targets, ALL_SKILLS);
+
+    expect(installed.state).toBe("up-to-date");
+    expect(updated.state).toBe("up-to-date");
+    expect(
+      await fs.readFile(path.join(sandbox.targets.agentsDir, "remio", "SKILL.md"), "utf8"),
+    ).toBe("remio-v1");
+  });
+
+  it("repairs missing and edited skills without deleting a legacy directory", async () => {
+    await writeCurrentBundle(sandbox.targets.sourceDir);
+    await writeOnDiskSkill(sandbox.targets.agentsDir, "remio", { "SKILL.md": "stale" });
+    await writeOnDiskSkill(sandbox.targets.agentsDir, "remio-chat", { "SKILL.md": "chat-old" });
+    await writeOnDiskSkill(sandbox.targets.claudeDir, "remio-chat", { "SKILL.md": "chat-old" });
+    await writeOnDiskSkill(sandbox.targets.codexDir, "remio-chat", { "SKILL.md": "chat-old" });
+
+    const status = await updateSkills(sandbox.targets, ALL_SKILLS);
+
+    expect(status).toEqual({
+      state: "drift",
+      ops: [{ kind: "delete", name: "remio-chat" }],
+      available: ["remio", "remio-loop"],
+      installed: ["remio", "remio-chat", "remio-loop"],
+    });
+    expect(
+      await fs.readFile(path.join(sandbox.targets.agentsDir, "remio", "SKILL.md"), "utf-8"),
+    ).toBe("remio-v1");
+    expect(
+      await fs.readFile(path.join(sandbox.targets.agentsDir, "remio-loop", "SKILL.md"), "utf-8"),
+    ).toBe("loop-v1");
+    for (const dir of [
+      sandbox.targets.agentsDir,
+      sandbox.targets.claudeDir,
+      sandbox.targets.codexDir,
+    ]) {
+      expect(await pathExists(path.join(dir, "remio-chat"))).toBe(true);
+    }
+  });
+
+  it("defines updated as the state reached after preserving user files", async () => {
+    await writeCurrentBundle(sandbox.targets.sourceDir);
+    await writeOnDiskSkillToAllTargets(sandbox.targets, "remio", { "SKILL.md": "remio-v1" });
+    await writeOnDiskSkillToAllTargets(sandbox.targets, "remio-loop", { "SKILL.md": "loop-v1" });
+    await writeOnDiskSkill(sandbox.targets.agentsDir, "remio", {
+      "SKILL.md": "stale",
+      "hooks/guard.sh": "user guard",
+    });
+    await writeOnDiskSkill(sandbox.targets.claudeDir, "remio", {
+      "SKILL.md": "remio-v1",
+      "notes/local.md": "claude notes",
+    });
+    await writeOnDiskSkill(sandbox.targets.codexDir, "remio", {
+      "SKILL.md": "remio-v1",
+      "prompts/local.md": "codex prompt",
+    });
+
+    const status = await updateSkills(sandbox.targets, ALL_SKILLS);
+
+    expect(status.state).toBe("up-to-date");
+    expect(await getSkillsStatus(sandbox.targets, ALL_SKILLS)).toEqual({
+      state: "up-to-date",
+      ops: [],
+      available: ["remio", "remio-loop"],
+      installed: ["remio", "remio-loop"],
+    });
+    expect(
+      await fs.readFile(
+        path.join(sandbox.targets.agentsDir, "remio", "hooks", "guard.sh"),
+        "utf-8",
+      ),
+    ).toBe("user guard");
+    expect(
+      await fs.readFile(
+        path.join(sandbox.targets.claudeDir, "remio", "notes", "local.md"),
+        "utf-8",
+      ),
+    ).toBe("claude notes");
+    expect(
+      await fs.readFile(
+        path.join(sandbox.targets.codexDir, "remio", "prompts", "local.md"),
+        "utf-8",
+      ),
+    ).toBe("codex prompt");
+  });
+
+  it("repairs secondary agent targets even when agents skills are current", async () => {
+    await writeCurrentBundle(sandbox.targets.sourceDir);
+    await writeOnDiskSkill(sandbox.targets.agentsDir, "remio", { "SKILL.md": "remio-v1" });
+    await writeOnDiskSkill(sandbox.targets.agentsDir, "remio-loop", { "SKILL.md": "loop-v1" });
+    await writeOnDiskSkill(sandbox.targets.claudeDir, "remio", { "SKILL.md": "remio-v1" });
+    await writeOnDiskSkill(sandbox.targets.codexDir, "remio", { "SKILL.md": "remio-v1" });
+    await writeOnDiskSkill(sandbox.targets.codexDir, "remio-loop", { "SKILL.md": "loop-v1" });
+
+    const status = await updateSkills(sandbox.targets, ALL_SKILLS);
+
+    expect(status.state).toBe("up-to-date");
+    expect(
+      await fs.readFile(path.join(sandbox.targets.claudeDir, "remio-loop", "SKILL.md"), "utf-8"),
+    ).toBe("loop-v1");
+    expect(
+      await fs.readFile(path.join(sandbox.targets.antigravityDir, "remio", "SKILL.md"), "utf-8"),
+    ).toBe("remio-v1");
+    expect(
+      await fs.readFile(
+        path.join(sandbox.targets.antigravityDir, "remio-loop", "SKILL.md"),
+        "utf-8",
+      ),
+    ).toBe("loop-v1");
+  });
+
+  it("auto-updates drifted installed skills", async () => {
+    await writeCurrentBundle(sandbox.targets.sourceDir);
+    await writeOnDiskSkill(sandbox.targets.agentsDir, "remio", {
+      "SKILL.md": "stale",
+      "hooks/guard.sh": "user guard",
+    });
+
+    const status = await autoUpdateInstalledSkills(sandbox.targets, ALL_SKILLS);
+
+    expect(status.state).toBe("up-to-date");
+    expect((await getSkillsStatus(sandbox.targets, ALL_SKILLS)).state).toBe("up-to-date");
+    expect(
+      await fs.readFile(path.join(sandbox.targets.agentsDir, "remio", "SKILL.md"), "utf-8"),
+    ).toBe("remio-v1");
+    expect(
+      await fs.readFile(
+        path.join(sandbox.targets.agentsDir, "remio", "hooks", "guard.sh"),
+        "utf-8",
+      ),
+    ).toBe("user guard");
+    expect(
+      await fs.readFile(path.join(sandbox.targets.antigravityDir, "remio", "SKILL.md"), "utf-8"),
+    ).toBe("remio-v1");
+  });
+
+  it("does not auto-install skills on a clean machine", async () => {
+    await writeCurrentBundle(sandbox.targets.sourceDir);
+
+    const status = await autoUpdateInstalledSkills(sandbox.targets, ALL_SKILLS);
+
+    expect(status).toEqual({
+      state: "not-installed",
+      ops: [
+        { kind: "add", name: "remio" },
+        { kind: "add", name: "remio-loop" },
+      ],
+      available: ["remio", "remio-loop"],
+      installed: [],
+    });
+    expect(await installedIn(sandbox.targets, "remio")).toEqual([false, false, false, false]);
+  });
+
+  it("is idempotent — running install twice keeps state at up-to-date", async () => {
+    await writeCurrentBundle(sandbox.targets.sourceDir);
+
+    const first = await installSkills(sandbox.targets, ALL_SKILLS);
+    const second = await installSkills(sandbox.targets, ALL_SKILLS);
+
+    expect(first.state).toBe("up-to-date");
+    expect(second.state).toBe("up-to-date");
+  });
+});
+
+describe("uninstallSkills", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox();
+  });
+
+  afterEach(async () => {
+    await fs.rm(sandbox.root, { recursive: true, force: true });
+  });
+
+  it("removes every Remio skill from all targets and preserves user dirs and symlinks", async () => {
+    await writeCurrentBundle(sandbox.targets.sourceDir);
+    await installSkills(sandbox.targets, ALL_SKILLS);
+    for (const name of ["unslop", "tdd", "devbox"]) {
+      await writeOnDiskSkill(sandbox.targets.agentsDir, name, { "SKILL.md": `user-${name}` });
+    }
+    await writeOnDiskSkill(sandbox.targets.antigravityDir, "user-agy-skill", {
+      "SKILL.md": "user-agy",
+    });
+    const linkedSource = path.join(sandbox.root, "external-user-skill");
+    await writeFiles(linkedSource, { "SKILL.md": "linked-user-skill" });
+    await fs.symlink(
+      linkedSource,
+      path.join(sandbox.targets.antigravityDir, "linked-user-skill"),
+      "dir",
+    );
+
+    const status = await uninstallSkills(sandbox.targets, ALL_SKILLS);
+
+    expect(status.state).toBe("not-installed");
+    for (const name of ["remio", "remio-loop", ...LEGACY_SKILL_NAMES]) {
+      expect(await installedIn(sandbox.targets, name)).toEqual([false, false, false, false]);
+    }
+    for (const name of ["unslop", "tdd", "devbox"]) {
+      expect(
+        await fs.readFile(path.join(sandbox.targets.agentsDir, name, "SKILL.md"), "utf-8"),
+      ).toBe(`user-${name}`);
+    }
+    expect(
+      await fs.readFile(
+        path.join(sandbox.targets.antigravityDir, "user-agy-skill", "SKILL.md"),
+        "utf-8",
+      ),
+    ).toBe("user-agy");
+    expect(
+      (
+        await fs.lstat(path.join(sandbox.targets.antigravityDir, "linked-user-skill"))
+      ).isSymbolicLink(),
+    ).toBe(true);
+    expect(
+      await fs.readFile(
+        path.join(sandbox.targets.antigravityDir, "linked-user-skill", "SKILL.md"),
+        "utf-8",
+      ),
+    ).toBe("linked-user-skill");
+  });
+
+  it("is a no-op when nothing is installed", async () => {
+    await writeCurrentBundle(sandbox.targets.sourceDir);
+
+    const status = await uninstallSkills(sandbox.targets, ALL_SKILLS);
+
+    expect(status.state).toBe("not-installed");
+  });
+
+  it("cleans up legacy skill names that linger in agents, claude, codex, and antigravity", async () => {
+    await writeCurrentBundle(sandbox.targets.sourceDir);
+    for (const dir of [
+      sandbox.targets.agentsDir,
+      sandbox.targets.claudeDir,
+      sandbox.targets.codexDir,
+      sandbox.targets.antigravityDir,
+    ]) {
+      await writeOnDiskSkill(dir, "remio-chat", { "SKILL.md": "chat-old" });
+    }
+
+    const status = await uninstallSkills(sandbox.targets, ALL_SKILLS);
+
+    expect(status.state).toBe("not-installed");
+    expect(await installedIn(sandbox.targets, "remio-chat")).toEqual([false, false, false, false]);
+  });
+});

@@ -1,0 +1,6 @@
+{
+  "id": "pi-tasks-timeline",
+  "requirements": {
+    "remio": ">=0.0.1"
+  }
+}

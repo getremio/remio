@@ -1,0 +1,76 @@
+---
+title: Updates
+description: How Remio releases work, the difference between stable and beta channels, and how to opt in to earlier updates.
+nav: Updates
+order: 5
+category: Getting started
+---
+
+# Updates
+
+Remio ships updates through two channels: **Stable** and **Beta**.
+
+Most releases go out on the stable channel. Betas are release candidates that let you test what's coming next before it rolls out to everyone.
+
+## Version numbers
+
+Remio follows [Semantic Versioning](https://semver.org) with prerelease tags.
+
+A stable release looks like this:
+
+```
+v0.1.90
+```
+
+A beta for the same release looks like this:
+
+```
+v0.1.90-beta.1
+```
+
+If a release needs more testing, we cut additional betas:
+
+```
+v0.1.92-beta.1
+v0.1.92-beta.2
+v0.1.92-beta.3
+```
+
+When the release is ready, the final stable tag is `v0.1.92` — not `v0.1.93`. The betas are checkpoints on the way to the same stable version.
+
+## Stable channel
+
+The stable channel is the default. Stable desktop releases roll out gradually over **18 hours**: a small group of installs gets the release first, then everyone else over the following hours. If something unexpected slips through, it doesn't hit everyone at once.
+
+After the desktop app updates, it waits **24 hours** before it takes the next regular release, so frequent releases don't mean frequent restarts. Urgent fixes skip the wait. Clicking **Check** in the app skips both the rollout and the wait and installs immediately.
+
+Stable releases are what most users should run.
+
+## Beta channel
+
+The beta channel gets every prerelease as soon as it's published, with no rollout delay. When a beta is promoted to stable, beta users receive that stable update immediately too.
+
+Betas are the best way to get fixes and features early. If you hit a bug, report it — beta feedback is what makes stable releases reliable.
+
+### How to join the beta channel
+
+| Platform       | How to get betas                                                                                              |
+| -------------- | ------------------------------------------------------------------------------------------------------------- |
+| iOS and iPadOS | Download from the [releases page](https://github.com/getremio/remio/releases).                                |
+| Android        | Download the APK from a prerelease on the [GitHub releases page](https://github.com/getremio/remio/releases). |
+| Desktop        | Open **Settings → About** and select **Beta** under **Release channel**.                                      |
+| CLI            | Run `npm install -g @getremio/cli@beta`. Plain `npm install -g @getremio/cli` stays on stable.                |
+
+The desktop app checks for beta updates from the moment you select **Beta**.
+
+## App stores
+
+Desktop releases and the CLI are usually available first. App Store and Play Store releases can lag behind because they go through review.
+
+The App Store and Play Store listings carry stable builds only. Beta and release builds can be downloaded from the [releases page](https://github.com/getremio/remio/releases).
+
+## What to do if something breaks
+
+Beta builds are expected to have rough edges. If a beta causes problems, you can switch back to the stable channel in **Settings → About → Release channel**. The next stable update will install normally.
+
+If you need a fix that hasn't shipped to stable yet, stay on beta and report the issue. Most problems found in beta are fixed before the stable release.
