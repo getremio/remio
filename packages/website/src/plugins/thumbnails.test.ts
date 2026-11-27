@@ -211,7 +211,12 @@ describe("thumbnail route", () => {
     ],
     ["removed plugin", thumbnailRequest(), [], 404],
     ["listed video", thumbnailRequest(video), [{ ...plugin, media: [video, source] }], 404],
-    ["malformed encoding", new Request("https://remio.hoshizukimio.moe/plugins/thumb/592/%ZZ"), [plugin], 400],
+    [
+      "malformed encoding",
+      new Request("https://remio.hoshizukimio.moe/plugins/thumb/592/%ZZ"),
+      [plugin],
+      400,
+    ],
     ["malformed URL", thumbnailRequest("not a URL"), [plugin], 400],
     ...[
       "https://example.com/preview.png",

@@ -1850,7 +1850,8 @@ export async function createRemioDaemon(
             const relayEnabled = config.relayEnabled ?? true;
             const relayEndpoint = config.relayEndpoint ?? "relay.remio.hoshizukimio.moe:443";
             const relayPublicEndpoint = config.relayPublicEndpoint ?? relayEndpoint;
-            const relayUseTls = config.relayUseTls ?? relayEndpoint === "relay.remio.hoshizukimio.moe:443";
+            const relayUseTls =
+              config.relayUseTls ?? relayEndpoint === "relay.remio.hoshizukimio.moe:443";
             const relayPublicUseTls = config.relayPublicUseTls ?? relayUseTls;
             if (boundListenTarget.type === "tcp") {
               logger.info(

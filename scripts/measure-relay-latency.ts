@@ -110,7 +110,12 @@ async function main() {
     },
   });
 
-  await measurePings("Relay (relay.remio.hoshizukimio.moe:443)", relayClient, PING_COUNT, WARMUP_COUNT);
+  await measurePings(
+    "Relay (relay.remio.hoshizukimio.moe:443)",
+    relayClient,
+    PING_COUNT,
+    WARMUP_COUNT,
+  );
 
   // Measure raw WebSocket to relay (no E2EE, no daemon, just WS open+close timing)
   console.log("\nMeasuring raw WebSocket connect time to relay...");

@@ -33,7 +33,12 @@ describe("Remio tool display", () => {
     ["start_workspace_script", { scriptName: "web" }, "Start script", "web"],
     ["send_terminal_keys", { terminalId: "t1", keys: "npm test" }, "Send keys", "npm test"],
     ["create_schedule", { prompt: "Check CI", cron: "0 9 * * 1" }, "Create schedule", "0 9 * * 1"],
-    ["browser_navigate", { url: "https://remio.hoshizukimio.moe" }, "Navigate", "https://remio.hoshizukimio.moe"],
+    [
+      "browser_navigate",
+      { url: "https://remio.hoshizukimio.moe" },
+      "Navigate",
+      "https://remio.hoshizukimio.moe",
+    ],
     [
       "browser_upload",
       { ref: "@e1", filePaths: ["/a.png", "/b.png"] },

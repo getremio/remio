@@ -27,10 +27,14 @@ const claudeScripts: AgentScript[] = [];
 const codexScripts: AgentScript[] = [];
 
 function git(cwd: string, ...args: string[]): string {
-  return execFileSync("git", ["-c", "user.name=Mo", "-c", "user.email=remio@hoshizukimio.com", ...args], {
-    cwd,
-    encoding: "utf8",
-  });
+  return execFileSync(
+    "git",
+    ["-c", "user.name=Mo", "-c", "user.email=remio@hoshizukimio.com", ...args],
+    {
+      cwd,
+      encoding: "utf8",
+    },
+  );
 }
 
 function run(cwd: string, command: string): string {

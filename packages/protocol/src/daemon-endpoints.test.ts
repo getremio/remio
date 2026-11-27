@@ -228,7 +228,9 @@ describe("relay connection URI", () => {
     const uri = serializeRelayConnectionUri(parts);
     expect(parseRelayConnectionUri(uri)).toEqual(parts);
     expect(
-      parseRelayConnectionUri(`https://app.remio.hoshizukimio.moe/#connect=${encodeURIComponent(uri)}`),
+      parseRelayConnectionUri(
+        `https://app.remio.hoshizukimio.moe/#connect=${encodeURIComponent(uri)}`,
+      ),
     ).toEqual(parts);
   });
 });

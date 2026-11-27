@@ -43,7 +43,11 @@ describe("pageMeta", () => {
     expect(links).toEqual([
       { rel: "canonical", href: "https://remio.hoshizukimio.moe/zh-CN/docs/cli" },
       { rel: "alternate", hrefLang: "en", href: "https://remio.hoshizukimio.moe/docs/cli" },
-      { rel: "alternate", hrefLang: "zh-CN", href: "https://remio.hoshizukimio.moe/zh-CN/docs/cli" },
+      {
+        rel: "alternate",
+        hrefLang: "zh-CN",
+        href: "https://remio.hoshizukimio.moe/zh-CN/docs/cli",
+      },
       { rel: "alternate", hrefLang: "x-default", href: "https://remio.hoshizukimio.moe/docs/cli" },
     ]);
     expect(meta).toEqual(

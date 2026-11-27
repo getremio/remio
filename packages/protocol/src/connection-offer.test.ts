@@ -37,7 +37,9 @@ describe("connection offer", () => {
     });
     const encoded = encodeBase64UrlNoPadUtf8(JSON.stringify(offer));
 
-    expect(parseConnectionOfferFromUrl(`https://app.remio.hoshizukimio.moe/#offer=${encoded}`)).toEqual(offer);
+    expect(
+      parseConnectionOfferFromUrl(`https://app.remio.hoshizukimio.moe/#offer=${encoded}`),
+    ).toEqual(offer);
   });
 
   it("leaves relay TLS unset when absent", () => {
@@ -65,7 +67,9 @@ describe("connection offer", () => {
     });
     const encoded = encodeBase64UrlNoPadUtf8(JSON.stringify(offer));
 
-    expect(parseConnectionOfferFromUrl(`https://app.remio.hoshizukimio.moe/#offer=${encoded}`)).toEqual({
+    expect(
+      parseConnectionOfferFromUrl(`https://app.remio.hoshizukimio.moe/#offer=${encoded}`),
+    ).toEqual({
       v: 2,
       serverId: "server-123",
       daemonPublicKeyB64: "pubkey",

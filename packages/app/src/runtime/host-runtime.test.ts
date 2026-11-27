@@ -1208,7 +1208,9 @@ describe("HostRuntimeController", () => {
       status: "available",
       latencyMs: 14,
     });
-    expect(controller.getSnapshot().probeByConnectionId.get("relay:relay.remio.hoshizukimio.moe:443")).toEqual({
+    expect(
+      controller.getSnapshot().probeByConnectionId.get("relay:relay.remio.hoshizukimio.moe:443"),
+    ).toEqual({
       status: "available",
       latencyMs: 90,
     });
@@ -1589,7 +1591,9 @@ describe("HostRuntimeController", () => {
       status: "available",
       latencyMs: 12,
     });
-    expect(snapshot.probeByConnectionId.get("relay:relay.remio.hoshizukimio.moe:443")).toEqual(initialRelayProbe);
+    expect(snapshot.probeByConnectionId.get("relay:relay.remio.hoshizukimio.moe:443")).toEqual(
+      initialRelayProbe,
+    );
   });
 
   it("switches only after the faster alternative wins consecutive probes", async () => {
@@ -1620,11 +1624,13 @@ describe("HostRuntimeController", () => {
     await controller.runProbeCycleNow();
     expect(controller.getSnapshot().activeConnectionId).toBe("direct:lan:7676");
 
-    let switched = controller.getSnapshot().activeConnectionId === "relay:relay.remio.hoshizukimio.moe:443";
+    let switched =
+      controller.getSnapshot().activeConnectionId === "relay:relay.remio.hoshizukimio.moe:443";
     for (let index = 0; index < 6 && !switched; index += 1) {
       await vi.advanceTimersByTimeAsync(120_000);
       await controller.runProbeCycleNow();
-      switched = controller.getSnapshot().activeConnectionId === "relay:relay.remio.hoshizukimio.moe:443";
+      switched =
+        controller.getSnapshot().activeConnectionId === "relay:relay.remio.hoshizukimio.moe:443";
     }
     expect(switched).toBe(true);
     expect(controller.getSnapshot().client).not.toBeNull();
@@ -1672,11 +1678,13 @@ describe("HostRuntimeController", () => {
     await controller.runProbeCycleNow();
     expect(controller.getSnapshot().activeConnectionId).toBe("direct:lan:7676");
 
-    let switched = controller.getSnapshot().activeConnectionId === "relay:relay.remio.hoshizukimio.moe:443";
+    let switched =
+      controller.getSnapshot().activeConnectionId === "relay:relay.remio.hoshizukimio.moe:443";
     for (let index = 0; index < 6 && !switched; index += 1) {
       await vi.advanceTimersByTimeAsync(120_000);
       await controller.runProbeCycleNow();
-      switched = controller.getSnapshot().activeConnectionId === "relay:relay.remio.hoshizukimio.moe:443";
+      switched =
+        controller.getSnapshot().activeConnectionId === "relay:relay.remio.hoshizukimio.moe:443";
     }
     expect(switched).toBe(true);
   });
@@ -1811,7 +1819,9 @@ describe("HostRuntimeController", () => {
       await vi.advanceTimersByTimeAsync(120_000);
       await controller.runProbeCycleNow();
     }
-    expect(controller.getSnapshot().activeConnectionId).toBe("relay:relay.remio.hoshizukimio.moe:443");
+    expect(controller.getSnapshot().activeConnectionId).toBe(
+      "relay:relay.remio.hoshizukimio.moe:443",
+    );
     await controller.stop();
   });
 
@@ -1843,7 +1853,9 @@ describe("HostRuntimeController", () => {
     latencies["relay:relay.remio.hoshizukimio.moe:443"] = new Error("relay unreachable");
     await vi.advanceTimersByTimeAsync(120_000);
     await controller.runProbeCycleNow();
-    expect(controller.getSnapshot().probeByConnectionId.get("relay:relay.remio.hoshizukimio.moe:443")).toEqual({
+    expect(
+      controller.getSnapshot().probeByConnectionId.get("relay:relay.remio.hoshizukimio.moe:443"),
+    ).toEqual({
       status: "unavailable",
       latencyMs: null,
     });
@@ -1857,7 +1869,9 @@ describe("HostRuntimeController", () => {
       await vi.advanceTimersByTimeAsync(120_000);
       await controller.runProbeCycleNow();
     }
-    expect(controller.getSnapshot().activeConnectionId).toBe("relay:relay.remio.hoshizukimio.moe:443");
+    expect(controller.getSnapshot().activeConnectionId).toBe(
+      "relay:relay.remio.hoshizukimio.moe:443",
+    );
     await controller.stop();
   });
 

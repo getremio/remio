@@ -407,7 +407,9 @@ test.describe("search engine visits without JavaScript", () => {
     request,
   }) => {
     const robots = await request.get("/robots.txt");
-    expect(await robots.text()).toContain("Sitemap: https://remio.hoshizukimio.moe/sitemap-index.xml");
+    expect(await robots.text()).toContain(
+      "Sitemap: https://remio.hoshizukimio.moe/sitemap-index.xml",
+    );
     const index = await request.get("/sitemap-index.xml");
     expect(await index.text()).toContain("https://remio.hoshizukimio.moe/sitemap-plugins.xml");
     const plugins = await request.get("/sitemap-plugins.xml");
@@ -417,7 +419,9 @@ test.describe("search engine visits without JavaScript", () => {
     expect(sitemap).toContain("<loc>https://remio.hoshizukimio.moe/plugins/all</loc>");
     expect(sitemap).toContain("<loc>https://remio.hoshizukimio.moe/plugins/category/git</loc>");
     expect(sitemap).toContain("<loc>https://remio.hoshizukimio.moe/plugins/omercnet</loc>");
-    expect(sitemap).toContain("<loc>https://remio.hoshizukimio.moe/plugins/omercnet/fresh-worktrees</loc>");
+    expect(sitemap).toContain(
+      "<loc>https://remio.hoshizukimio.moe/plugins/omercnet/fresh-worktrees</loc>",
+    );
   });
 });
 

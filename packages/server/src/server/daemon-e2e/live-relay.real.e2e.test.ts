@@ -11,7 +11,8 @@ import {
   type ConnectionOffer,
 } from "@getremio/protocol/connection-offer";
 
-const relayEndpoint = process.env.REMIO_LIVE_RELAY_ENDPOINT ?? "relay-next.remio.hoshizukimio.moe:443";
+const relayEndpoint =
+  process.env.REMIO_LIVE_RELAY_ENDPOINT ?? "relay-next.remio.hoshizukimio.moe:443";
 const liveTest = process.env.RUN_LIVE_RELAY_E2E === "1" ? test : test.skip;
 
 function requireOffer(url: string): ConnectionOffer {

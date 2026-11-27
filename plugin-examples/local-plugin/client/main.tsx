@@ -108,7 +108,9 @@ export function ExamplePanel({
   return (
     <View style={styles.screen}>
       <Markdown>{"## Workspace plugin panel\n\nCall a **daemon RPC** from this panel."}</Markdown>
-      <ExternalLink href="https://remio.hoshizukimio.moe/docs/plugins">Plugin documentation</ExternalLink>
+      <ExternalLink href="https://remio.hoshizukimio.moe/docs/plugins">
+        Plugin documentation
+      </ExternalLink>
       {openBrowser ? (
         <Pressable accessibilityRole="button" onPress={handleOpenBrowser} style={styles.button}>
           <Text style={styles.buttonText}>Read in workspace browser</Text>

@@ -349,7 +349,9 @@ describe("plugin registry", () => {
           `<xhtml:link rel="alternate" hreflang="x-default" href="${english}"/></url>`,
       );
     }
-    expect(xml).toContain("<loc>https://remio.hoshizukimio.moe/zh-CN/plugins/category/themes</loc>");
+    expect(xml).toContain(
+      "<loc>https://remio.hoshizukimio.moe/zh-CN/plugins/category/themes</loc>",
+    );
   });
 
   it("strips the README title and quoted description that the page already shows", () => {

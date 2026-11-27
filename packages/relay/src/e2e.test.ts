@@ -17,7 +17,9 @@ import {
 
 const nodeMajor = Number((process.versions.node ?? "0").split(".")[0] ?? "0");
 const shouldRunRelayE2e = process.env.FORCE_RELAY_E2E === "1" || nodeMajor < 25;
-const wranglerPackageRoot = dirname(createRequire(import.meta.url).resolve("wrangler/package.json"));
+const wranglerPackageRoot = dirname(
+  createRequire(import.meta.url).resolve("wrangler/package.json"),
+);
 const wranglerCliPath = resolvePath(wranglerPackageRoot, "bin/wrangler.js");
 const relayPackageRoot = resolvePath(dirname(fileURLToPath(import.meta.url)), "..");
 const STARTUP_HOOK_TIMEOUT_MS = 90_000;

@@ -18,7 +18,8 @@ import { pluginDisplayName } from "@/plugins/plugin-list";
 import { listingAuthor, listingSource, listingText, listingVersion } from "./listing";
 import { dismissFailedOperation, installPlugin, usePluginOperation } from "./operations";
 
-const PLUGIN_SOURCE_DOCS_URL = "https://remio.hoshizukimio.moe/docs/plugins/reference#plugin-sources";
+const PLUGIN_SOURCE_DOCS_URL =
+  "https://remio.hoshizukimio.moe/docs/plugins/reference#plugin-sources";
 const SOURCE_SUBJECT = "source";
 
 /** What the sheet installs: a directory listing, or a source the user types. */

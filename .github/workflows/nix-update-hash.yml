@@ -25,9 +25,21 @@ jobs:
   update-hash:
     runs-on: ubuntu-latest
     steps:
+      - name: Check bot app secrets
+        id: bot-secrets
+        env:
+          APP_ID: ${{ secrets.REMIO_BOT_APP_ID }}
+          PRIVATE_KEY: ${{ secrets.REMIO_BOT_APP_PRIVATE_KEY }}
+        run: |
+          if [ -n "$APP_ID" ] && [ -n "$PRIVATE_KEY" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/create-github-app-token@v1
         id: app-token
-        if: ${{ secrets.REMIO_BOT_APP_ID != '' && secrets.REMIO_BOT_APP_PRIVATE_KEY != '' }}
+        if: steps.bot-secrets.outputs.enabled == 'true'
         with:
           app-id: ${{ secrets.REMIO_BOT_APP_ID }}
           private-key: ${{ secrets.REMIO_BOT_APP_PRIVATE_KEY }}

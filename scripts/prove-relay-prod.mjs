@@ -24,7 +24,8 @@ const serverId = args["server-id"] ?? process.env.REMIO_SERVER_ID;
 const daemonPublicKeyB64 = args["daemon-public-key-b64"] ?? process.env.REMIO_DAEMON_PUBLIC_KEY_B64;
 const relayEndpoint =
   args["relay-endpoint"] ?? process.env.REMIO_RELAY_ENDPOINT ?? "relay.remio.hoshizukimio.moe:443";
-const baseUrl = args["base-url"] ?? process.env.REMIO_APP_URL ?? "https://app.remio.hoshizukimio.moe";
+const baseUrl =
+  args["base-url"] ?? process.env.REMIO_APP_URL ?? "https://app.remio.hoshizukimio.moe";
 const timeoutMs = Number(args["timeout-ms"] ?? process.env.REMIO_PROVE_TIMEOUT_MS ?? 60_000);
 const stabilityMs = Number(args["stability-ms"] ?? process.env.REMIO_PROVE_STABILITY_MS ?? 30_000);
 

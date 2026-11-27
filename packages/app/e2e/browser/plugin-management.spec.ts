@@ -271,7 +271,9 @@ async function expectPluginSourceDocsOpen(page: Page): Promise<void> {
     .context()
     .waitForEvent(
       "request",
-      (request) => request.isNavigationRequest() && request.url().startsWith("https://remio.hoshizukimio.moe/"),
+      (request) =>
+        request.isNavigationRequest() &&
+        request.url().startsWith("https://remio.hoshizukimio.moe/"),
     );
   const docsPagePromise = page.context().waitForEvent("page");
   await page.getByRole("link", { name: "Docs", exact: true }).click();

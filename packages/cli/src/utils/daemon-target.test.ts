@@ -45,7 +45,10 @@ test("endpoint descriptions redact pairing material and credentials", () => {
     }),
   ).not.toMatch(/private|secret/);
   expect(
-    describeDaemonTarget({ kind: "endpoint", host: "https://app.remio.hoshizukimio.moe/#offer=private" }),
+    describeDaemonTarget({
+      kind: "endpoint",
+      host: "https://app.remio.hoshizukimio.moe/#offer=private",
+    }),
   ).not.toContain("private");
 });
 

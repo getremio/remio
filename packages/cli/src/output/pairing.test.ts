@@ -35,7 +35,8 @@ describe("formatPairingInstructions", () => {
     const output = formatPairingInstructions({
       qr: null,
       url: URL,
-      connectionUri: "relay://relay.remio.hoshizukimio.moe:443/srv_test?key=public&password=private-value",
+      connectionUri:
+        "relay://relay.remio.hoshizukimio.moe:443/srv_test?key=public&password=private-value",
     });
 
     expect(output).toContain(

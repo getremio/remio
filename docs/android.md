@@ -4,8 +4,8 @@
 
 Controlled by `APP_VARIANT` in `packages/app/app.config.js` (vanilla Expo, no custom Gradle plugin):
 
-| Variant       | App name    | Package ID       |
-| ------------- | ----------- | ---------------- |
+| Variant       | App name    | Package ID                     |
+| ------------- | ----------- | ------------------------------ |
 | `production`  | Remio       | `moe.hoshizukimio.remio`       |
 | `development` | Remio Debug | `moe.hoshizukimio.remio.debug` |
 

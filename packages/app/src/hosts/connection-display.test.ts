@@ -65,7 +65,11 @@ describe("describeActiveConnection", () => {
 
   it("strips standard web ports on relay, tailscale, and direct connections", () => {
     expect(
-      describeActiveConnection({ type: "relay", endpoint: "relay.remio.hoshizukimio.moe:443", display: "relay" }),
+      describeActiveConnection({
+        type: "relay",
+        endpoint: "relay.remio.hoshizukimio.moe:443",
+        display: "relay",
+      }),
     ).toEqual({ kind: "relay", endpoint: "relay.remio.hoshizukimio.moe" });
     expect(
       describeActiveConnection({
@@ -101,7 +105,9 @@ describe("describeActiveConnection", () => {
   });
 
   it("strips default HTTP/HTTPS ports only", () => {
-    expect(formatConnectionEndpoint("relay.remio.hoshizukimio.moe:443")).toBe("relay.remio.hoshizukimio.moe");
+    expect(formatConnectionEndpoint("relay.remio.hoshizukimio.moe:443")).toBe(
+      "relay.remio.hoshizukimio.moe",
+    );
     expect(formatConnectionEndpoint("example.com:80")).toBe("example.com");
     expect(formatConnectionEndpoint("127.0.0.1:7676")).toBe("127.0.0.1:7676");
   });
