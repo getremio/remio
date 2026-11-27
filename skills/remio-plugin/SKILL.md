@@ -19,8 +19,8 @@ Before you write a contribution, read its section in the docs:
 - Elsewhere, fetch [https://remio.hoshizukimio.moe/llms.txt](https://remio.hoshizukimio.moe/llms.txt), then fetch the plugin pages that it lists.
 - If the network is not available, continue from this skill.
 
-| Page                                                            | Read it for                                                                                                      |
-| --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Page                                                                          | Read it for                                                                                                      |
+| ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | [Quickstart](https://remio.hoshizukimio.moe/docs/plugins.md)                  | A first plugin, installation, and reload                                                                         |
 | [Reference](https://remio.hoshizukimio.moe/docs/plugins/reference.md)         | Client contributions, host UI, the Remio SDK, RPCs, usage sources, worktree managers, the CLI, and load failures |
 | [Hooks](https://remio.hoshizukimio.moe/docs/plugins/hooks.md)                 | Lifecycle hooks, payloads, ordering, agent tools, and MCP servers                                                |

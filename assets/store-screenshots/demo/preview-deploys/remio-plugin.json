@@ -1,4 +1,4 @@
 {
   "id": "preview-deploys",
-  "requirements": { "remio": ">=0.8.0" }
+  "requirements": { "remio": ">=0.0.1" }
 }

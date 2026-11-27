@@ -373,7 +373,7 @@ test("plugin host APIs and observations recover after repeated daemon-side socke
   roots.push(pluginDirectory, workspaceDirectory);
   await writeFile(
     path.join(pluginDirectory, "remio-plugin.json"),
-    JSON.stringify({ id: "reconnecting", requirements: { remio: ">=0.8.0" } }),
+    JSON.stringify({ id: "reconnecting", requirements: { remio: ">=0.0.1" } }),
   );
   await writeFile(
     path.join(pluginDirectory, "index.server.ts"),

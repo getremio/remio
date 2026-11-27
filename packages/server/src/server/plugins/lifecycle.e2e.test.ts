@@ -18,7 +18,7 @@ test("a plugin transforms workspace creation once across receipt replays and obs
   try {
     await writeFile(
       path.join(directory, "remio-plugin.json"),
-      JSON.stringify({ id: "lifecycle", requirements: { remio: ">=0.8.0" } }),
+      JSON.stringify({ id: "lifecycle", requirements: { remio: ">=0.0.1" } }),
     );
     await writeFile(
       path.join(directory, "index.server.ts"),
@@ -85,7 +85,7 @@ test("addHook transforms workspace creation once across receipt replays and obse
   try {
     await writeFile(
       path.join(directory, "remio-plugin.json"),
-      JSON.stringify({ id: "lifecycle", requirements: { remio: ">=0.8.0" } }),
+      JSON.stringify({ id: "lifecycle", requirements: { remio: ">=0.0.1" } }),
     );
     await writeFile(
       path.join(directory, "index.server.ts"),
@@ -155,7 +155,7 @@ test("plugins observe turns, answer permissions, and observe archive without blo
   try {
     await writeFile(
       path.join(directory, "remio-plugin.json"),
-      JSON.stringify({ id: "turn-hooks", requirements: { remio: ">=0.8.0" } }),
+      JSON.stringify({ id: "turn-hooks", requirements: { remio: ">=0.0.1" } }),
     );
     await writeFile(
       path.join(directory, "index.server.ts"),
@@ -540,7 +540,7 @@ test("agent creation hooks change the provider and environment before the sessio
   await mkdir(extraPlugin);
   await writeFile(
     path.join(extraPlugin, "remio-plugin.json"),
-    JSON.stringify({ id: "a-prompt", requirements: { remio: ">=0.8.0" } }),
+    JSON.stringify({ id: "a-prompt", requirements: { remio: ">=0.0.1" } }),
   );
   const writePrompt = (prompt: string) =>
     writeFile(
@@ -679,7 +679,7 @@ child.on("exit", (code) => process.exit(code ?? 1));
   await mkdir(pluginDirectory);
   await writeFile(
     path.join(pluginDirectory, "remio-plugin.json"),
-    JSON.stringify({ id: "terminal-hooks", requirements: { remio: ">=0.8.0" } }),
+    JSON.stringify({ id: "terminal-hooks", requirements: { remio: ">=0.0.1" } }),
   );
   await writeFile(
     path.join(pluginDirectory, "index.server.ts"),
@@ -852,7 +852,7 @@ test("invalid output from an untyped plugin rejects creation before later callba
   try {
     await writeFile(
       path.join(directory, "remio-plugin.json"),
-      JSON.stringify({ id: "invalid-hook", requirements: { remio: ">=0.8.0" } }),
+      JSON.stringify({ id: "invalid-hook", requirements: { remio: ">=0.0.1" } }),
     );
     await writeFile(
       path.join(directory, "index.server.ts"),
@@ -1278,7 +1278,7 @@ test("waiting hook failures reject the operation while notification failures are
       path.join(directory, "remio-plugin.json"),
       JSON.stringify({
         id: "hook-failures",
-        requirements: { remio: ">=0.14.0-beta.1" },
+        requirements: { remio: ">=0.0.1" },
       }),
     );
     await writeFile(

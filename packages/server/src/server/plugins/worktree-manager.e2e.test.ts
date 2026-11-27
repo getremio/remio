@@ -158,7 +158,7 @@ test("plugin-examples/worktrunk manages create, before-hook chaining, archive wi
   await mkdir(transformPluginDir);
   await writeFile(
     path.join(transformPluginDir, "remio-plugin.json"),
-    JSON.stringify({ id: "a-branch-transform", requirements: { remio: ">=0.14.0" } }),
+    JSON.stringify({ id: "a-branch-transform", requirements: { remio: ">=0.0.1" } }),
   );
   await writeFile(
     path.join(transformPluginDir, "index.server.ts"),
@@ -376,7 +376,7 @@ test("worktree manager supports decline fallback, rollback delegation, and disab
   await mkdir(pluginDir);
   await writeFile(
     path.join(pluginDir, "remio-plugin.json"),
-    JSON.stringify({ id: "custom-manager", requirements: { remio: ">=0.17.0" } }),
+    JSON.stringify({ id: "custom-manager", requirements: { remio: ">=0.0.1" } }),
   );
   await writeFile(
     path.join(pluginDir, "index.server.ts"),
@@ -514,7 +514,7 @@ test("worktree manager rejects pre-existing worktrees, detached HEAD, wrong repo
   await mkdir(pluginDir);
   await writeFile(
     path.join(pluginDir, "remio-plugin.json"),
-    JSON.stringify({ id: "bad-manager", requirements: { remio: ">=0.17.0" } }),
+    JSON.stringify({ id: "bad-manager", requirements: { remio: ">=0.0.1" } }),
   );
   await writeFile(
     path.join(pluginDir, "index.server.ts"),
@@ -646,7 +646,7 @@ test("worktree manager rejects duplicate registration and fails removal when the
   await mkdir(dupPluginDir);
   await writeFile(
     path.join(dupPluginDir, "remio-plugin.json"),
-    JSON.stringify({ id: "dup-manager", requirements: { remio: ">=0.17.0" } }),
+    JSON.stringify({ id: "dup-manager", requirements: { remio: ">=0.0.1" } }),
   );
   await writeFile(
     path.join(dupPluginDir, "index.server.ts"),
@@ -662,7 +662,7 @@ test("worktree manager rejects duplicate registration and fails removal when the
   await mkdir(leakyRemoveDir);
   await writeFile(
     path.join(leakyRemoveDir, "remio-plugin.json"),
-    JSON.stringify({ id: "leaky-remove", requirements: { remio: ">=0.17.0" } }),
+    JSON.stringify({ id: "leaky-remove", requirements: { remio: ">=0.0.1" } }),
   );
   await writeFile(
     path.join(leakyRemoveDir, "index.server.ts"),
@@ -882,7 +882,7 @@ test("concurrent restores across two daemon clients wait for the in-flight manag
   await mkdir(pluginDir);
   await writeFile(
     path.join(pluginDir, "remio-plugin.json"),
-    JSON.stringify({ id: "slow-restore-manager", requirements: { remio: ">=0.17.0" } }),
+    JSON.stringify({ id: "slow-restore-manager", requirements: { remio: ">=0.0.1" } }),
   );
   await writeFile(
     path.join(pluginDir, "index.server.ts"),
@@ -1012,7 +1012,7 @@ test("restore waits for an in-flight CLI worktree archive remove before recreati
   await mkdir(pluginDir);
   await writeFile(
     path.join(pluginDir, "remio-plugin.json"),
-    JSON.stringify({ id: "slow-remove-manager", requirements: { remio: ">=0.17.0" } }),
+    JSON.stringify({ id: "slow-remove-manager", requirements: { remio: ">=0.0.1" } }),
   );
   await writeFile(
     path.join(pluginDir, "index.server.ts"),
@@ -1148,7 +1148,7 @@ test("git fallback restore clears manager ownership across sibling workspaces sh
   await mkdir(pluginDir);
   await writeFile(
     path.join(pluginDir, "remio-plugin.json"),
-    JSON.stringify({ id: "owner-tracking-manager", requirements: { remio: ">=0.17.0" } }),
+    JSON.stringify({ id: "owner-tracking-manager", requirements: { remio: ">=0.0.1" } }),
   );
   await writeFile(
     path.join(pluginDir, "index.server.ts"),
@@ -1307,7 +1307,7 @@ test("worktree manager rejects nested and enclosing secondary worktrees without 
   await mkdir(pluginDir);
   await writeFile(
     path.join(pluginDir, "remio-plugin.json"),
-    JSON.stringify({ id: "nested-layout-manager", requirements: { remio: ">=0.17.0" } }),
+    JSON.stringify({ id: "nested-layout-manager", requirements: { remio: ">=0.0.1" } }),
   );
   await writeFile(
     path.join(pluginDir, "index.server.ts"),
@@ -1462,7 +1462,7 @@ test("archive and rollback refuse to delete a worktree containing a live nested 
   await mkdir(pluginDir);
   await writeFile(
     path.join(pluginDir, "remio-plugin.json"),
-    JSON.stringify({ id: "nested-delete-guard-manager", requirements: { remio: ">=0.17.0" } }),
+    JSON.stringify({ id: "nested-delete-guard-manager", requirements: { remio: ">=0.0.1" } }),
   );
   await writeFile(
     path.join(pluginDir, "index.server.ts"),

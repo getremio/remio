@@ -7,7 +7,7 @@ export function seedPluginLinks(remioHome, workspaceId, url, remoteWorkspaceId) 
   fs.mkdirSync(directory, { recursive: true });
   fs.writeFileSync(
     path.join(directory, "remio-plugin.json"),
-    JSON.stringify({ id: "link-check", requirements: { remio: ">=0.8.0" } }),
+    JSON.stringify({ id: "link-check", requirements: { remio: ">=0.0.1" } }),
   );
   fs.writeFileSync(
     path.join(directory, "index.client.tsx"),

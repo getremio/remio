@@ -9,8 +9,16 @@ import { fileURLToPath } from "node:url";
 import { WebSocket } from "ws";
 import { DaemonClient } from "../../../../client/dist/daemon-client.js";
 
-const [, , session, daemonUrl, workspaceId, agentId, appId = "moe.hoshizukimio.remio.debug", metroPort = "8081"] =
-  process.argv;
+const [
+  ,
+  ,
+  session,
+  daemonUrl,
+  workspaceId,
+  agentId,
+  appId = "moe.hoshizukimio.remio.debug",
+  metroPort = "8081",
+] = process.argv;
 assert(
   session && daemonUrl && workspaceId && agentId,
   "Pass a session, isolated daemon URL, workspace ID, and agent ID",
@@ -47,7 +55,7 @@ try {
     path.join(directory, "remio-plugin.json"),
     JSON.stringify({
       id: pluginId,
-      requirements: { remio: ">=0.11.4" },
+      requirements: { remio: ">=0.0.1" },
     }),
   );
   await writeFile(
